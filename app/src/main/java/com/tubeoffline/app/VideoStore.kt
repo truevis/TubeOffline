@@ -1,0 +1,127 @@
+package com.tubeoffline.app
+
+import android.app.RecoverableSecurityException
+import android.content.ContentUris
+import android.content.ContentValues
+import android.content.Context
+import android.content.IntentSender
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import java.io.File
+
+data class SavedVideo(
+    val uri: Uri,
+    val name: String,
+    val sizeBytes: Long,
+    val durationMs: Long,
+    val dateAddedSec: Long,
+)
+
+/** Movies/TubeOffline via MediaStore (scoped storage, no storage permission needed to write). */
+object VideoStore {
+    val RELATIVE_DIR = Environment.DIRECTORY_MOVIES + "/TubeOffline/"
+
+    private fun collection(): Uri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+
+    /** Makes a title safe to use as a file name on Android (and Windows, if copied to a PC). */
+    fun sanitizeFileName(title: String, maxLength: Int = 120): String {
+        val cleaned = title
+            .replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .trim('.', ' ')
+        val cut = if (cleaned.length > maxLength) cleaned.take(maxLength).trimEnd('.', ' ') else cleaned
+        return cut.ifBlank { "video" }
+    }
+
+    fun mimeFor(ext: String): String = when (ext.lowercase()) {
+        "mp4", "m4v" -> "video/mp4"
+        "webm" -> "video/webm"
+        "mkv" -> "video/x-matroska"
+        "3gp" -> "video/3gpp"
+        else -> "video/*"
+    }
+
+    /** Copies [source] into Movies/TubeOffline and returns its content Uri. */
+    fun save(context: Context, source: File, title: String): Uri {
+        val ext = source.extension.ifBlank { "mp4" }
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, "${sanitizeFileName(title)}.$ext")
+            put(MediaStore.Video.Media.MIME_TYPE, mimeFor(ext))
+            put(MediaStore.Video.Media.RELATIVE_PATH, RELATIVE_DIR)
+            put(MediaStore.Video.Media.TITLE, title)
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(collection(), values)
+            ?: throw IllegalStateException("Could not create file in Movies/TubeOffline")
+        try {
+            resolver.openOutputStream(uri)?.use { out ->
+                source.inputStream().use { it.copyTo(out, 1 shl 16) }
+            } ?: throw IllegalStateException("Could not open output file")
+            resolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+            return uri
+        } catch (e: Throwable) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    fun list(context: Context): List<SavedVideo> {
+        val projection = arrayOf(
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.DATE_ADDED,
+        )
+        val result = mutableListOf<SavedVideo>()
+        context.contentResolver.query(
+            collection(),
+            projection,
+            "${MediaStore.Video.Media.RELATIVE_PATH} LIKE ?",
+            arrayOf("$RELATIVE_DIR%"),
+            "${MediaStore.Video.Media.DATE_ADDED} DESC",
+        )?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+            val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+            val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+            val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
+            while (c.moveToNext()) {
+                result += SavedVideo(
+                    uri = ContentUris.withAppendedId(collection(), c.getLong(idCol)),
+                    name = c.getString(nameCol) ?: "video",
+                    sizeBytes = c.getLong(sizeCol),
+                    durationMs = c.getLong(durCol),
+                    dateAddedSec = c.getLong(dateCol),
+                )
+            }
+        }
+        return result
+    }
+
+    sealed interface DeleteResult {
+        data object Deleted : DeleteResult
+        /** File belongs to an older install: the user has to confirm via this system dialog. */
+        data class NeedsConfirmation(val intentSender: IntentSender) : DeleteResult
+        data class Failed(val message: String) : DeleteResult
+    }
+
+    fun delete(context: Context, uri: Uri): DeleteResult = try {
+        context.contentResolver.delete(uri, null, null)
+        DeleteResult.Deleted
+    } catch (e: SecurityException) {
+        when {
+            Build.VERSION.SDK_INT >= 30 -> DeleteResult.NeedsConfirmation(
+                MediaStore.createDeleteRequest(context.contentResolver, listOf(uri)).intentSender
+            )
+            e is RecoverableSecurityException -> DeleteResult.NeedsConfirmation(e.userAction.actionIntent.intentSender)
+            else -> DeleteResult.Failed(e.message ?: "Permission denied")
+        }
+    } catch (e: Exception) {
+        DeleteResult.Failed(e.message ?: "Delete failed")
+    }
+}
