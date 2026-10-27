@@ -53,6 +53,17 @@ gradlew.bat assembleDebug
 
 **APK output:** `app\build\outputs\apk\debug\app-debug.apk` (~85 MB; it contains Python + ffmpeg for arm64).
 
+## One-step build + install (Windows)
+
+Plug in the phone (USB debugging on, see below), then from the repo folder, e.g. Cursor's terminal:
+
+```powershell
+.\install.ps1             # build the debug APK and install it
+.\install.ps1 -SkipBuild  # reinstall the last build without rebuilding
+```
+
+Or double-click `install.bat`. The script finds the Android SDK (`ANDROID_HOME` or `%LOCALAPPDATA%\Android\Sdk`), creates `local.properties` if it is missing, uses Android Studio's bundled JDK when no Java is on PATH, checks that exactly one authorized phone is connected, and runs `adb install -r`.
+
 ## Install on the Pixel 8
 
 1. On the phone: *Settings → About phone →* tap *Build number* 7× → *Settings → System → Developer options →* enable **USB debugging**.
