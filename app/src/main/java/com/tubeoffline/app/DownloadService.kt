@@ -157,7 +157,7 @@ class DownloadService : Service() {
 
             title = output.nameWithoutExtension
             goForeground("Saving to Movies/TubeOffline…", null)
-            val uri = VideoStore.save(this, output, title)
+            val uri = VideoStore.save(this, output, title, YouTubeUrl.videoId(url))
             Notifications.success(this, VideoStore.sanitizeFileName(title), uri, output.length())
             publish { it.copy(lastMessage = "Saved: $title") }
         } catch (e: YoutubeDL.CanceledException) {

@@ -29,6 +29,6 @@ class ShareActivity : Activity() {
         }
         DownloadService.enqueue(this, url)
         val extra = if (Notifications.canPost(this)) "" else "\n(Open TubeOffline once to allow notifications)"
-        Toast.makeText(this, "Downloading lowest quality for offline…$extra", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Added to the download queue.$extra", Toast.LENGTH_SHORT).show()
     }
 }

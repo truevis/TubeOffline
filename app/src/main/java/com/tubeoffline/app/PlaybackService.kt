@@ -15,6 +15,9 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /** Hosts ExoPlayer for background and screen-off playback with a media notification. */
 @UnstableApi
@@ -79,6 +82,7 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
     }
 
     override fun onDestroy() {
+        _nowPlaying.value = null
         mediaSession?.run {
             player.release()
             release()
@@ -92,29 +96,52 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
         private val player: Player,
     ) : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            updateNowPlaying(player)
             val uri = player.currentMediaItem?.mediaId?.let(Uri::parse) ?: return
             if (player.playbackState != Player.STATE_READY && player.playbackState != Player.STATE_BUFFERING) return
-            PlaybackPositionStore.save(context, uri, player.currentPosition, paused = !isPlaying)
+            PlaybackPositionStore.record(
+                context,
+                uri,
+                player.currentPosition,
+                player.duration,
+                paused = !isPlaying,
+            )
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            updateNowPlaying(player)
             val item = player.currentMediaItem ?: return
             val uri = Uri.parse(item.mediaId)
             when (playbackState) {
-                Player.STATE_ENDED -> PlaybackPositionStore.clear(context, uri)
-                Player.STATE_READY -> {
-                    PlaybackPositionStore.clearIfNearEnd(
-                        context,
-                        uri,
-                        player.currentPosition,
-                        player.duration,
-                    )
-                }
+                Player.STATE_ENDED -> PlaybackPositionStore.markCompleted(context, uri)
+                Player.STATE_READY -> PlaybackPositionStore.record(
+                    context,
+                    uri,
+                    player.currentPosition,
+                    player.duration,
+                    paused = !player.isPlaying,
+                )
             }
         }
     }
 
     companion object {
+        private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
+        val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
+
+        private fun updateNowPlaying(player: Player) {
+            val item = player.currentMediaItem
+            _nowPlaying.value = if (item == null || player.playbackState == Player.STATE_IDLE) {
+                null
+            } else {
+                NowPlaying(
+                    uri = Uri.parse(item.mediaId),
+                    title = item.mediaMetadata.title?.toString() ?: "Video",
+                    isPlaying = player.isPlaying,
+                )
+            }
+        }
+
         fun mediaItem(uri: Uri, title: String): MediaItem = MediaItem.Builder()
             .setMediaId(uri.toString())
             .setMediaMetadata(
@@ -126,3 +153,9 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             .build()
     }
 }
+
+data class NowPlaying(
+    val uri: Uri,
+    val title: String,
+    val isPlaying: Boolean,
+)

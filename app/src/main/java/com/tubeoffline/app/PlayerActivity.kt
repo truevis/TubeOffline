@@ -13,7 +13,12 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,8 +28,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -51,7 +63,22 @@ class PlayerActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             AppTheme {
-                PlayerScreen(onControllerReady = { controller = it })
+                PlayerScreen(
+                    onControllerReady = { controller = it },
+                    onDismiss = {
+                        Toast.makeText(
+                            this,
+                            "Playback continues. Tap Now playing to return.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        finish()
+                    },
+                    onStop = {
+                        controller?.stop()
+                        controller?.clearMediaItems()
+                        finish()
+                    },
+                )
             }
         }
     }
@@ -104,7 +131,11 @@ data class PlayRequest(val uri: Uri, val title: String)
 
 @UnstableApi
 @Composable
-private fun PlayerScreen(onControllerReady: (MediaController?) -> Unit) {
+private fun PlayerScreen(
+    onControllerReady: (MediaController?) -> Unit,
+    onDismiss: () -> Unit,
+    onStop: () -> Unit,
+) {
     val context = LocalContext.current
     val activity = context as PlayerActivity
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -185,31 +216,59 @@ private fun PlayerScreen(onControllerReady: (MediaController?) -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                useController = true
-                playerView = this
-                controller?.let { player = it }
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = true
+                    playerView = this
+                    controller?.let { player = it }
+                }
+            },
+            update = { view ->
+                playerView = view
+                if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                    view.player = controller
+                }
+            },
+        )
+
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .statusBarsPadding(),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            tonalElevation = 3.dp,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = playRequest?.title ?: "Now playing",
+                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+                TextButton(onClick = onStop) { Text("Stop") }
             }
-        },
-        update = { view ->
-            playerView = view
-            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                view.player = controller
-            }
-        },
-    )
+        }
+    }
 }
 
 private fun savePlaybackProgress(context: Context, player: Player) {
     val uri = player.currentMediaItem?.mediaId?.let(Uri::parse) ?: return
-    PlaybackPositionStore.save(
+    PlaybackPositionStore.record(
         context,
         uri,
         player.currentPosition,
+        player.duration,
         paused = !player.isPlaying,
+        ended = player.playbackState == Player.STATE_ENDED,
     )
 }
 

@@ -15,6 +15,7 @@ import java.io.File
 data class SavedVideo(
     val uri: Uri,
     val name: String,
+    val youTubeId: String?,
     val sizeBytes: Long,
     val durationMs: Long,
     val dateAddedSec: Long,
@@ -64,7 +65,7 @@ object VideoStore {
     }
 
     /** Copies [source] into Movies/TubeOffline and returns its content Uri. */
-    fun save(context: Context, source: File, title: String): Uri {
+    fun save(context: Context, source: File, title: String, youTubeId: String? = null): Uri {
         val ext = source.extension.ifBlank { "mp4" }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
@@ -72,6 +73,7 @@ object VideoStore {
             put(MediaStore.Video.Media.MIME_TYPE, mimeFor(ext))
             put(MediaStore.Video.Media.RELATIVE_PATH, RELATIVE_DIR)
             put(MediaStore.Video.Media.TITLE, title)
+            youTubeId?.let { put(MediaStore.Video.Media.DESCRIPTION, "youtube:$it") }
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(collection(), values)
@@ -92,6 +94,7 @@ object VideoStore {
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media.DESCRIPTION,
             MediaStore.Video.Media.SIZE,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.DATE_ADDED,
@@ -106,6 +109,7 @@ object VideoStore {
         )?.use { c ->
             val idCol = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
             val nameCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+            val descriptionCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DESCRIPTION)
             val sizeCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
             val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
             val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
@@ -113,6 +117,9 @@ object VideoStore {
                 result += SavedVideo(
                     uri = ContentUris.withAppendedId(collection(), c.getLong(idCol)),
                     name = c.getString(nameCol) ?: "video",
+                    youTubeId = c.getString(descriptionCol)
+                        ?.removePrefix("youtube:")
+                        ?.takeIf { c.getString(descriptionCol)?.startsWith("youtube:") == true },
                     sizeBytes = c.getLong(sizeCol),
                     durationMs = c.getLong(durCol),
                     dateAddedSec = c.getLong(dateCol),

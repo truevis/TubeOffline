@@ -1,10 +1,15 @@
 package com.tubeoffline.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.os.StatFs
 import android.text.format.DateUtils
+import android.text.format.Formatter
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -51,6 +56,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -84,12 +91,16 @@ internal fun AppTheme(content: @Composable () -> Unit) {
 private fun MainScreen() {
     val context = LocalContext.current
     val status by DownloadService.status.collectAsStateWithLifecycle()
+    val nowPlaying by PlaybackService.nowPlaying.collectAsStateWithLifecycle()
 
     var videos by remember { mutableStateOf<List<SavedVideo>>(emptyList()) }
+    var completedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var toDelete by remember { mutableStateOf<SavedVideo?>(null) }
+    var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
     var pasted by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
+    var freeBytes by remember { mutableStateOf<Long?>(null) }
 
     val filteredVideos = remember(videos, searchQuery) {
         val q = searchQuery.trim()
@@ -103,7 +114,13 @@ private fun MainScreen() {
     ) { refresh() }
     val deleteLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
-    ) { refresh() }
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            pendingDeleteUri?.let { PlaybackPositionStore.clear(context, it) }
+        }
+        pendingDeleteUri = null
+        refresh()
+    }
 
     LaunchedEffect(Unit) {
         val perms = buildList {
@@ -118,23 +135,60 @@ private fun MainScreen() {
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh() }
     LaunchedEffect(refreshKey, status.finishedCount) {
-        videos = withContext(Dispatchers.IO) {
+        val listed = withContext(Dispatchers.IO) {
             try { VideoStore.list(context) } catch (_: Exception) { emptyList() }
+        }
+        videos = listed
+        completedUris = listed
+            .filter { PlaybackPositionStore.isCompleted(context, it.uri) }
+            .map { it.uri.toString() }
+            .toSet()
+        freeBytes = withContext(Dispatchers.IO) {
+            try {
+                StatFs(Environment.getExternalStorageDirectory().path).availableBytes
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("TubeOffline") }) }) { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text("TubeOffline")
+                },
+            )
+        },
+    ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item {
-                Text(
-                    "Share a YouTube video to “TubeOffline” from the YouTube app or Chrome. " +
-                        "It downloads the smallest version, with the English audio, to Movies/TubeOffline.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                val uriHandler = LocalUriHandler.current
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Sponsored by aifab.xyz",
+                        modifier = Modifier.clickable { uriHandler.openUri("https://aifab.xyz") },
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = MaterialTheme.colorScheme.primary,
+                            textDecoration = TextDecoration.Underline,
+                        ),
+                    )
+                    freeBytes?.let { bytes ->
+                        Text(
+                            text = "${Formatter.formatFileSize(context, bytes)} free",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
 
             item {
@@ -144,7 +198,7 @@ private fun MainScreen() {
                         onValueChange = { pasted = it },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        label = { Text("…or paste a YouTube link") },
+                        label = { Text("Paste a YouTube link") },
                     )
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
@@ -154,8 +208,39 @@ private fun MainScreen() {
                         } else {
                             DownloadService.enqueue(context, url)
                             pasted = ""
+                            Toast.makeText(context, "Added to the download queue", Toast.LENGTH_SHORT).show()
                         }
-                    }) { Text("Get") }
+                    }) { Text("Download") }
+                }
+            }
+
+            nowPlaying?.let { playing ->
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                context.startActivity(
+                                    PlayerActivity.playIntent(context, playing.uri, playing.title),
+                                )
+                            },
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Now playing", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    playing.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                            }
+                            Text(if (playing.isPlaying) "Open player" else "Resume")
+                        }
+                    }
                 }
             }
 
@@ -163,18 +248,23 @@ private fun MainScreen() {
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
-                            Text("Downloading", style = MaterialTheme.typography.titleSmall)
+                            Text("Downloading now", style = MaterialTheme.typography.titleSmall)
                             Text(status.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.padding(4.dp))
                             val pct = status.percent
                             if (pct == null) LinearProgressIndicator(Modifier.fillMaxWidth())
                             else LinearProgressIndicator(progress = { pct / 100f }, modifier = Modifier.fillMaxWidth())
-                            if (status.queued > 0) Text("${status.queued} more queued", style = MaterialTheme.typography.bodySmall)
+                            if (status.queued > 0) {
+                                Text(
+                                    "${status.queued} more waiting in the queue",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                             TextButton(onClick = {
                                 context.startService(
                                     Intent(context, DownloadService::class.java).setAction(DownloadService.ACTION_CANCEL)
                                 )
-                            }) { Text("Cancel") }
+                            }) { Text("Cancel download") }
                         }
                     }
                 }
@@ -185,16 +275,18 @@ private fun MainScreen() {
             item {
                 HorizontalDivider()
                 val q = searchQuery.trim()
-                val downloadedTitle = when {
-                    videos.isEmpty() -> "No videos downloaded yet."
-                    q.isEmpty() -> "Downloaded (${videos.size})"
-                    else -> "Downloaded (${filteredVideos.size} of ${videos.size})"
+                val heading = when {
+                    videos.isEmpty() -> "Your library is empty"
+                    q.isNotEmpty() -> "Results"
+                    else -> null
                 }
-                Text(
-                    downloadedTitle,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
+                if (heading != null) {
+                    Text(
+                        heading,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
             }
 
             if (videos.isNotEmpty()) {
@@ -211,13 +303,14 @@ private fun MainScreen() {
 
             if (videos.isNotEmpty() && searchQuery.isNotBlank() && filteredVideos.isEmpty()) {
                 item {
-                    Text("No downloads match your search.", style = MaterialTheme.typography.bodySmall)
+                    Text("No downloads match that search.", style = MaterialTheme.typography.bodySmall)
                 }
             }
 
             items(filteredVideos, key = { it.uri.toString() }) { video ->
                 VideoRow(
                     video = video,
+                    played = video.uri.toString() in completedUris,
                     onOpen = {
                         val title = video.name.substringBeforeLast('.')
                         context.startActivity(PlayerActivity.playIntent(context, video.uri, title))
@@ -237,9 +330,14 @@ private fun MainScreen() {
                 TextButton(onClick = {
                     toDelete = null
                     when (val r = VideoStore.delete(context, video.uri)) {
-                        VideoStore.DeleteResult.Deleted -> refresh()
-                        is VideoStore.DeleteResult.NeedsConfirmation ->
+                        VideoStore.DeleteResult.Deleted -> {
+                            PlaybackPositionStore.clear(context, video.uri)
+                            refresh()
+                        }
+                        is VideoStore.DeleteResult.NeedsConfirmation -> {
+                            pendingDeleteUri = video.uri
                             deleteLauncher.launch(IntentSenderRequest.Builder(r.intentSender).build())
+                        }
                         is VideoStore.DeleteResult.Failed ->
                             Toast.makeText(context, "Couldn't delete: ${r.message}", Toast.LENGTH_LONG).show()
                     }
@@ -251,16 +349,27 @@ private fun MainScreen() {
 }
 
 @Composable
-private fun VideoRow(video: SavedVideo, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun VideoRow(video: SavedVideo, played: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
-        Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            YouTubeThumbnail(video.youTubeId)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(video.name.substringBeforeLast('.'), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    video.name.substringBeforeLast('.'),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (played) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
                 val parts = buildList {
                     add(formatSize(video.sizeBytes))
                     if (video.durationMs > 0) add(DateUtils.formatElapsedTime(video.durationMs / 1000))
                 }
-                Text(parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                Text(parts.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = onDelete) { Text("Delete") }
         }
