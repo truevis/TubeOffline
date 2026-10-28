@@ -15,19 +15,26 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -50,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import kotlin.math.abs
@@ -158,6 +166,8 @@ private fun PlayerScreen(
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var playRequest by remember { mutableStateOf(PlayerActivity.playRequestFrom(activity.intent)) }
     var controllerVisible by remember { mutableStateOf(true) }
+    var playbackSpeed by remember { mutableFloatStateOf(1f) }
+    var speedMenuOpen by remember { mutableStateOf(false) }
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val showTitleRow = !inPictureInPicture && (!isLandscape || controllerVisible)
 
@@ -216,6 +226,18 @@ private fun PlayerScreen(
         }
     }
 
+    DisposableEffect(controller) {
+        val c = controller ?: return@DisposableEffect onDispose {}
+        playbackSpeed = c.playbackParameters.speed
+        val listener = object : Player.Listener {
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+                playbackSpeed = playbackParameters.speed
+            }
+        }
+        c.addListener(listener)
+        onDispose { c.removeListener(listener) }
+    }
+
     val currentController by rememberUpdatedState(controller)
     val currentPlayerView by rememberUpdatedState(playerView)
 
@@ -265,7 +287,9 @@ private fun PlayerScreen(
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .statusBarsPadding(),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            // Overlay sits on black video; use inverse colors so title/icons stay light.
+            color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.94f),
+            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
             tonalElevation = 3.dp,
         ) {
             Row(
@@ -279,6 +303,40 @@ private fun PlayerScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Box {
+                    TextButton(
+                        onClick = { speedMenuOpen = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            formatPlaybackSpeed(playbackSpeed),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = speedMenuOpen,
+                        onDismissRequest = { speedMenuOpen = false },
+                    ) {
+                        PlaybackSpeeds.forEach { speed ->
+                            val selected = abs(playbackSpeed - speed) < 0.01f
+                            DropdownMenuItem(
+                                text = { Text(formatPlaybackSpeed(speed)) },
+                                leadingIcon = {
+                                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                        if (selected) {
+                                            Icon(Icons.Filled.Check, contentDescription = "Current speed")
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    controller?.setPlaybackSpeed(speed)
+                                    playbackSpeed = speed
+                                    speedMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Filled.Close, contentDescription = "Dismiss")
                 }
@@ -288,6 +346,18 @@ private fun PlayerScreen(
             }
         }
     }
+}
+
+private val PlaybackSpeeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f)
+
+private fun formatPlaybackSpeed(speed: Float): String {
+    val snapped = PlaybackSpeeds.firstOrNull { abs(it - speed) < 0.01f } ?: speed
+    val label = if (abs(snapped - snapped.toInt()) < 0.01f) {
+        snapped.toInt().toString()
+    } else {
+        String.format(java.util.Locale.US, "%.2f", snapped).trimEnd('0')
+    }
+    return "${label}×"
 }
 
 private val StopIcon: ImageVector = ImageVector.Builder(
