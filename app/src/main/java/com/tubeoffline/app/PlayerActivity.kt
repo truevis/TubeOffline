@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,6 +20,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +34,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -36,7 +46,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -58,12 +67,16 @@ class PlayerActivity : ComponentActivity() {
     var controller: MediaController? = null
         private set
 
+    private var inPictureInPicture by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        inPictureInPicture = isInPictureInPictureMode
         enableEdgeToEdge()
         setContent {
             AppTheme {
                 PlayerScreen(
+                    inPictureInPicture = inPictureInPicture,
                     onControllerReady = { controller = it },
                     onDismiss = {
                         Toast.makeText(
@@ -99,6 +112,7 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPictureInPicture = isInPictureInPictureMode
     }
 
     private fun buildPipParams(): PictureInPictureParams {
@@ -132,6 +146,7 @@ data class PlayRequest(val uri: Uri, val title: String)
 @UnstableApi
 @Composable
 private fun PlayerScreen(
+    inPictureInPicture: Boolean,
     onControllerReady: (MediaController?) -> Unit,
     onDismiss: () -> Unit,
     onStop: () -> Unit,
@@ -142,6 +157,9 @@ private fun PlayerScreen(
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var playRequest by remember { mutableStateOf(PlayerActivity.playRequestFrom(activity.intent)) }
+    var controllerVisible by remember { mutableStateOf(true) }
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val showTitleRow = !inPictureInPicture && (!isLandscape || controllerVisible)
 
     if (playRequest == null) {
         LaunchedEffect(Unit) {
@@ -221,16 +239,20 @@ private fun PlayerScreen(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 PlayerView(ctx).apply {
-                    useController = true
-                    setShowPreviousButton(false)
-                    setShowNextButton(false)
+                    useController = !inPictureInPicture
                     setShowRewindButton(true)
                     setShowFastForwardButton(true)
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            controllerVisible = visibility == View.VISIBLE
+                        },
+                    )
                     playerView = this
                     controller?.let { player = it }
                 }
             },
             update = { view ->
+                view.useController = !inPictureInPicture
                 playerView = view
                 if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
                     view.player = controller
@@ -238,7 +260,7 @@ private fun PlayerScreen(
             },
         )
 
-        Surface(
+        if (showTitleRow) Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
@@ -257,12 +279,32 @@ private fun PlayerScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                TextButton(onClick = onDismiss) { Text("Dismiss") }
-                TextButton(onClick = onStop) { Text("Stop") }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+                }
+                IconButton(onClick = onStop) {
+                    Icon(StopIcon, contentDescription = "Stop")
+                }
             }
         }
     }
 }
+
+private val StopIcon: ImageVector = ImageVector.Builder(
+    name = "Stop",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(6f, 6f)
+        lineTo(18f, 6f)
+        lineTo(18f, 18f)
+        lineTo(6f, 18f)
+        close()
+    }
+}.build()
 
 private fun savePlaybackProgress(context: Context, player: Player) {
     val uri = player.currentMediaItem?.mediaId?.let(Uri::parse) ?: return
