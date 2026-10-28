@@ -9,15 +9,16 @@ Built for a Pixel 8 (Android 14 – 17), sideloaded with `adb`. Not for the Play
 - Shows up as **“Download offline”** in the Android share sheet for any shared text/link.
 - Understands `youtube.com/watch?v=…`, `m.youtube.com/…`, `youtu.be/…`, `youtube.com/shorts/…`, `/live/…`, `/embed/…`, including shared text like `Video title https://youtu.be/xyz?si=…`. Playlist parameters are ignored (only the one video is downloaded).
 - The share screen closes immediately with a toast; the download runs in a **foreground service** with a progress notification (with a *Cancel* button). Multiple shares are queued and downloaded one after another.
-- Format choice (yt-dlp format selector):
-  `worstvideo[ext=mp4]+worstaudio[ext=m4a] / worstvideo+worstaudio / worst[ext=mp4] with audio+video / worst with audio+video`, merged with ffmpeg into **MP4**. In practice that's usually 144p H.264 + low-bitrate AAC (roughly 1–3 MB per minute).
-- Saves via MediaStore to **`Movies/TubeOffline/<video title>.mp4`** (title sanitised for file systems). Visible to Google Photos / Files / any video player.
+- Format choice (yt-dlp format selector): the smallest picture that still has sound, preferring an **English** audio track (dubbed tracks are skipped when YouTube labels a language). Merged with ffmpeg into **MP4**. In practice that's usually 144p H.264 + low-bitrate AAC (roughly 1–3 MB per minute). See `Engine.FORMAT_LOWEST`.
+- Saves via MediaStore to **`Movies/TubeOffline/<video title>.mp4`** (title sanitised for file systems). The YouTube video id is stored with the file so the app can show a thumbnail and share the original link. Visible to Google Photos / Files / any video player.
 - Notification when finished (tap to play) or failed (with a readable reason).
-- Main screen: list of downloaded videos (tap → play in an external player, *Delete*), a paste-a-link box, and **Update download engine** (updates the bundled yt-dlp from GitHub).
+- If the bundled yt-dlp is missing or older than about 60 days, the download service updates it from GitHub before starting. No button for that.
+- Main screen: paste a link, free space left on the phone, a **Now playing** card while something is open in the player, search, and the library. Each row has a thumbnail, the title (dimmed once you've finished it), a share icon (the original `youtube.com/watch?v=…` link), and a delete icon. Tap a row to play it in the built-in player.
+- Player: resumes where you left off, **10s** back and **15s** forward, and keeps playing if you leave the app (picture-in-picture when you switch away while it's playing). **Dismiss** leaves playback running; **Stop** ends it. Come back from the **Now playing** card.
 
 ## How it works
 
-Uses [youtubedl-android](https://github.com/yausername/youtubedl-android) `0.18.1` (Maven Central `io.github.junkfood02.youtubedl-android:library` + `:ffmpeg`), which bundles Python, **yt-dlp**, **ffmpeg** and **QuickJS** (the JS runtime yt-dlp now needs for YouTube). yt-dlp is the most actively maintained YouTube downloader, and the in-app updater lets you pull a new yt-dlp whenever YouTube breaks things — no rebuild needed.
+Uses [youtubedl-android](https://github.com/yausername/youtubedl-android) `0.18.1` (Maven Central `io.github.junkfood02.youtubedl-android:library` + `:ffmpeg`), which bundles Python, **yt-dlp**, **ffmpeg** and **QuickJS** (the JS runtime yt-dlp now needs for YouTube). Playback uses Media3 (ExoPlayer) in a media session, so audio continues with the screen off. yt-dlp is the most actively maintained YouTube downloader, and a stale copy is refreshed from GitHub automatically — no rebuild needed.
 
 | File | Purpose |
 |---|---|
@@ -26,7 +27,11 @@ Uses [youtubedl-android](https://github.com/yausername/youtubedl-android) `0.18.
 | `DownloadService.kt` | Foreground service (`dataSync`), queue, yt-dlp call, progress notification |
 | `Engine.kt` | yt-dlp init/update, format selector, human-readable errors |
 | `VideoStore.kt` | MediaStore save / list / delete in `Movies/TubeOffline` |
-| `MainActivity.kt` | Jetpack Compose UI |
+| `MainActivity.kt` | Jetpack Compose library UI |
+| `YouTubeThumbnail.kt` | Thumbnail for a saved video id |
+| `PlayerActivity.kt` | In-app player (seek ±10/15s, picture-in-picture) |
+| `PlaybackService.kt` | Media session so playback continues in the background |
+| `PlaybackPositionStore.kt` | Resume point and “already played” mark |
 
 ## Build on Windows
 
@@ -80,16 +85,16 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 ## Use it
 
 1. Open **TubeOffline** once and allow **notifications** (and "videos" access, so it can list files from earlier installs).
-2. Optional but recommended before a trip: tap **Update download engine**.
-3. In the YouTube app: *Share → Download offline (TubeOffline)*. (First time you may need *More* in the share sheet; long-press to pin it.) Works from Chrome too (share the page).
-4. Watch the progress notification. When done, tap the notification or open TubeOffline and tap the video. Files live in `Movies/TubeOffline`.
+2. In the YouTube app: *Share → Download offline (TubeOffline)*. (First time you may need *More* in the share sheet; long-press to pin it.) Works from Chrome too (share the page), or paste a link on the main screen.
+3. Watch the progress notification. When done, tap the notification or open TubeOffline and tap the video. Files live in `Movies/TubeOffline`.
+4. To send someone the original YouTube page, tap the share icon on that row.
 
 Tip: the first download after install takes a few extra seconds while the bundled Python/ffmpeg unpack.
 
 ## Limitations
 
 - **Lowest quality really is low** (usually 144p). Great for size, poor for small text. To change it, edit `Engine.FORMAT_LOWEST`, e.g. `bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]`.
-- YouTube changes things often. If downloads start failing (403, "no formats", "sign in to confirm you're not a bot"), tap **Update download engine** first. Bot checks tied to your network/IP can still block downloads for a while; there's no sign-in/cookie support.
+- YouTube changes things often. If downloads start failing (403, "no formats", "sign in to confirm you're not a bot"), the app tries to update yt-dlp when its copy is older than about 60 days. Bot checks tied to your network/IP can still block downloads for a while; there's no sign-in/cookie support.
 - No age-restricted, private, members-only or DRM content; live streams aren't supported in a useful way.
 - Playlists: only the single shared video is downloaded.
 - One download at a time (others are queued). Cancel cancels the current one and the queue.

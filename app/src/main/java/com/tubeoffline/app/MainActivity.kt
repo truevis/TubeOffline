@@ -29,9 +29,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -315,6 +320,14 @@ private fun MainScreen() {
                         val title = video.name.substringBeforeLast('.')
                         context.startActivity(PlayerActivity.playIntent(context, video.uri, title))
                     },
+                    onShare = video.youTubeId?.let { id ->
+                        {
+                            val send = Intent(Intent.ACTION_SEND)
+                                .setType("text/plain")
+                                .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
+                            context.startActivity(Intent.createChooser(send, null))
+                        }
+                    },
                     onDelete = { toDelete = video },
                 )
             }
@@ -349,7 +362,13 @@ private fun MainScreen() {
 }
 
 @Composable
-private fun VideoRow(video: SavedVideo, played: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
+private fun VideoRow(
+    video: SavedVideo,
+    played: Boolean,
+    onOpen: () -> Unit,
+    onShare: (() -> Unit)?,
+    onDelete: () -> Unit,
+) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
         Row(Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             YouTubeThumbnail(video.youTubeId)
@@ -371,7 +390,14 @@ private fun VideoRow(video: SavedVideo, played: Boolean, onOpen: () -> Unit, onD
                 }
                 Text(parts.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
             }
-            TextButton(onClick = onDelete) { Text("Delete") }
+            if (onShare != null) {
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Outlined.Share, contentDescription = "Share")
+                }
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Outlined.Delete, contentDescription = "Delete")
+            }
         }
     }
 }

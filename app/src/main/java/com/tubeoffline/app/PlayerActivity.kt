@@ -222,6 +222,10 @@ private fun PlayerScreen(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     useController = true
+                    setShowPreviousButton(false)
+                    setShowNextButton(false)
+                    setShowRewindButton(true)
+                    setShowFastForwardButton(true)
                     playerView = this
                     controller?.let { player = it }
                 }

@@ -37,6 +37,8 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
                 /* handleAudioFocus= */ true,
             )
             .setWakeMode(C.WAKE_MODE_LOCAL)
+            .setSeekBackIncrementMs(10_000)
+            .setSeekForwardIncrementMs(15_000)
             .build()
         player.addListener(PlaybackProgressListener(this, player))
         val openPlayer = PendingIntent.getActivity(
