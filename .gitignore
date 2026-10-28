@@ -32,7 +32,8 @@ output-metadata.json
 
 # Editor (project source lives elsewhere)
 .vscode/
-.cursor/
+.cursor/*
+!.cursor/skills/
 
 # Logs / diagnostics
 *.log
