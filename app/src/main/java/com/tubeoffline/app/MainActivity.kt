@@ -135,7 +135,7 @@ private fun MainScreen() {
             item {
                 Text(
                     "Share a YouTube video to “TubeOffline” from the YouTube app or Chrome. " +
-                        "It downloads the smallest version (with sound) to Movies/TubeOffline.",
+                        "It downloads the smallest version, with the English audio, to Movies/TubeOffline.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -222,11 +222,9 @@ private fun MainScreen() {
                 VideoRow(
                     video = video,
                     onOpen = {
-                        val view = Intent(Intent.ACTION_VIEW)
-                            .setDataAndType(video.uri, VideoStore.mimeFor(video.name.substringAfterLast('.', "mp4")))
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        val mime = VideoStore.mimeFor(video.name.substringAfterLast('.', "mp4"))
                         try {
-                            context.startActivity(Intent.createChooser(view, "Play with"))
+                            context.startActivity(VideoStore.viewIntent(context, video.uri, mime))
                         } catch (_: ActivityNotFoundException) {
                             Toast.makeText(context, "No video player installed", Toast.LENGTH_SHORT).show()
                         }

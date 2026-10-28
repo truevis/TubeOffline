@@ -1,10 +1,14 @@
-# Gradle
+# Gradle / Android build outputs
 .gradle/
 build/
 **/build/
-!gradle/wrapper/gradle-wrapper.jar
 
-# Local config (SDK path etc.)
+# Gradle wrapper JAR is required; ignore other JARs/AARs
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.aar
+
+# Machine-local SDK path (never commit)
 local.properties
 
 # Android Studio / IntelliJ
@@ -15,17 +19,25 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# Outputs
+# APK / packaging artifacts
 *.apk
 *.aab
 *.ap_
 *.dex
 output-metadata.json
 
-# Signing
+# Signing material
 *.jks
 *.keystore
 
-# OS
+# Editor (project source lives elsewhere)
+.vscode/
+.cursor/
+
+# Logs / diagnostics
+*.log
+*.hprof
+
+# OS junk
 .DS_Store
 Thumbs.db

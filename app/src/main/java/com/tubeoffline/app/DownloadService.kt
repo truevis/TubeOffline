@@ -122,9 +122,12 @@ class DownloadService : Service() {
         goForeground(title, null)
         try {
             goForeground("Starting download engine…", null)
-            Engine.ensureInit(this)
+            Engine.refreshIfStale(this) {
+                goForeground("Updating download engine…", null)
+            }
 
             val request = YoutubeDLRequest(url).apply {
+                addOption("--no-update")
                 addOption("-f", Engine.FORMAT_LOWEST)
                 addOption("--merge-output-format", "mp4")
                 addOption("--no-playlist")

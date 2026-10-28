@@ -4,6 +4,7 @@ import android.app.RecoverableSecurityException
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
@@ -34,6 +35,24 @@ object VideoStore {
             .trim('.', ' ')
         val cut = if (cleaned.length > maxLength) cleaned.take(maxLength).trimEnd('.', ' ') else cleaned
         return cut.ifBlank { "video" }
+    }
+
+    /** Pixel's video player, then the Files preview. Null package means any installed player. */
+    private val PLAYER_PACKAGES = listOf(
+        "com.google.android.apps.photos",
+        "com.google.android.apps.nbu.files",
+    )
+
+    /** Opens [uri] in the Pixel video viewer. Falls back to whatever else handles the type. */
+    fun viewIntent(context: Context, uri: Uri, mime: String): Intent {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        val player = PLAYER_PACKAGES.firstOrNull { pkg ->
+            Intent(intent).setPackage(pkg).resolveActivity(context.packageManager) != null
+        }
+        if (player != null) intent.setPackage(player)
+        return intent
     }
 
     fun mimeFor(ext: String): String = when (ext.lowercase()) {
