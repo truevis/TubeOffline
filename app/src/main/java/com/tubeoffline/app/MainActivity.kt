@@ -338,7 +338,9 @@ private fun MainScreen() {
         AlertDialog(
             onDismissRequest = { toDelete = null },
             title = { Text("Delete video?") },
-            text = { Text(video.name) },
+            text = {
+                Text("${video.name}\n\nThis permanently deletes the file from Movies/TubeOffline. It is not sent to trash.")
+            },
             confirmButton = {
                 TextButton(onClick = {
                     toDelete = null

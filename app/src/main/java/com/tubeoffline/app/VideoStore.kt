@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
@@ -136,8 +137,14 @@ object VideoStore {
         data class Failed(val message: String) : DeleteResult
     }
 
+    /**
+     * Permanently removes the video. On Android 11+, MediaStore's first
+     * [ContentResolver.delete] often only moves the row to trash; a second
+     * delete that includes trashed rows purges it. [MediaStore.createDeleteRequest]
+     * is used when we lack write access (also permanent, never trash).
+     */
     fun delete(context: Context, uri: Uri): DeleteResult = try {
-        context.contentResolver.delete(uri, null, null)
+        permanentlyDelete(context, uri)
         DeleteResult.Deleted
     } catch (e: SecurityException) {
         when {
@@ -149,5 +156,16 @@ object VideoStore {
         }
     } catch (e: Exception) {
         DeleteResult.Failed(e.message ?: "Delete failed")
+    }
+
+    private fun permanentlyDelete(context: Context, uri: Uri) {
+        val resolver = context.contentResolver
+        resolver.delete(uri, null, null)
+        if (Build.VERSION.SDK_INT >= 30) {
+            val extras = Bundle().apply {
+                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+            }
+            resolver.delete(uri, extras)
+        }
     }
 }
