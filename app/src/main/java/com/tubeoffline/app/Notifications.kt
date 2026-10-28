@@ -68,7 +68,7 @@ object Notifications {
     fun success(context: Context, name: String, uri: Uri, sizeBytes: Long) {
         val view = PendingIntent.getActivity(
             context, uri.hashCode(),
-            VideoStore.viewIntent(context, uri, "video/mp4"),
+            PlayerActivity.playIntent(context, uri, name),
             PendingIntent.FLAG_IMMUTABLE,
         )
         post(

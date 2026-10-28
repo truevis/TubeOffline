@@ -61,5 +61,9 @@ dependencies {
     implementation(libs.youtubedl.library)
     implementation(libs.youtubedl.ffmpeg)
 
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.ui)
+    implementation(libs.media3.session)
+
     testImplementation(libs.junit)
 }

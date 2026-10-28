@@ -98,17 +98,17 @@ object Engine {
         val lower = text.lowercase()
         val hint = when {
             "sign in to confirm" in lower && "bot" in lower ->
-                "YouTube is asking for a bot check. Tap 'Update download engine' and try again later."
+                "YouTube is asking for a bot check. Try again later."
             "sign in to confirm your age" in lower || "age-restricted" in lower ->
                 "Age-restricted video – can't be downloaded without signing in."
             "private video" in lower -> "This video is private."
             "members-only" in lower || "join this channel" in lower -> "Members-only video."
             "video unavailable" in lower -> "Video unavailable (removed or region-blocked)."
             "requested format is not available" in lower ->
-                "No downloadable format found. Try 'Update download engine'."
+                "No downloadable format found."
             // 403 text also contains "unable to download", so it has to be matched first.
             "http error 403" in lower || "sabr streaming" in lower ->
-                "YouTube refused the download (403). Tap 'Update download engine' and try again."
+                "YouTube refused the download (403). Try again later."
             "no address associated" in lower || "failed to resolve" in lower ||
                 "network is unreachable" in lower || "timed out" in lower ||
                 "connection refused" in lower || "failed to establish a new connection" in lower ->

@@ -27,7 +27,7 @@ class EngineTest {
             ERROR: unable to download video data: HTTP Error 403: Forbidden
         """.trimIndent()
         assertEquals(
-            "YouTube refused the download (403). Tap 'Update download engine' and try again.\n" +
+            "YouTube refused the download (403). Try again later.\n" +
                 "unable to download video data: HTTP Error 403: Forbidden",
             Engine.readableError(raw),
         )

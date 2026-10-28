@@ -1,7 +1,6 @@
 package com.tubeoffline.app
 
 import android.Manifest
-import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -28,12 +27,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -50,7 +47,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,7 +57,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -73,7 +68,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AppTheme(content: @Composable () -> Unit) {
+internal fun AppTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val dark = isSystemInDarkTheme()
     val scheme = when {
@@ -88,15 +83,18 @@ private fun AppTheme(content: @Composable () -> Unit) {
 @Composable
 private fun MainScreen() {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val status by DownloadService.status.collectAsStateWithLifecycle()
 
     var videos by remember { mutableStateOf<List<SavedVideo>>(emptyList()) }
     var refreshKey by remember { mutableIntStateOf(0) }
-    var updating by remember { mutableStateOf(false) }
-    var engineInfo by remember { mutableStateOf<String?>(null) }
     var toDelete by remember { mutableStateOf<SavedVideo?>(null) }
     var pasted by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredVideos = remember(videos, searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) videos else videos.filter { it.name.contains(q, ignoreCase = true) }
+    }
 
     val refresh = { refreshKey++ }
 
@@ -117,7 +115,6 @@ private fun MainScreen() {
             }
         }
         permissionLauncher.launch(perms.toTypedArray())
-        engineInfo = withContext(Dispatchers.IO) { Engine.version(context)?.let { "yt-dlp $it" } }
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh() }
     LaunchedEffect(refreshKey, status.finishedCount) {
@@ -186,48 +183,44 @@ private fun MainScreen() {
             }
 
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(
-                        enabled = !updating,
-                        onClick = {
-                            updating = true
-                            scope.launch {
-                                val msg = withContext(Dispatchers.IO) {
-                                    try { Engine.update(context) } catch (e: Exception) {
-                                        "Update failed: ${e.message ?: e.javaClass.simpleName}"
-                                    }
-                                }
-                                engineInfo = Engine.version(context)?.let { "yt-dlp $it" }
-                                updating = false
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                            }
-                        },
-                    ) { Text("Update download engine") }
-                    Spacer(Modifier.width(12.dp))
-                    if (updating) CircularProgressIndicator(Modifier.width(24.dp))
-                    else engineInfo?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                }
-            }
-
-            item {
                 HorizontalDivider()
+                val q = searchQuery.trim()
+                val downloadedTitle = when {
+                    videos.isEmpty() -> "No videos downloaded yet."
+                    q.isEmpty() -> "Downloaded (${videos.size})"
+                    else -> "Downloaded (${filteredVideos.size} of ${videos.size})"
+                }
                 Text(
-                    if (videos.isEmpty()) "No videos downloaded yet." else "Downloaded (${videos.size})",
+                    downloadedTitle,
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
 
-            items(videos, key = { it.uri.toString() }) { video ->
+            if (videos.isNotEmpty()) {
+                item {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("Search downloads") },
+                    )
+                }
+            }
+
+            if (videos.isNotEmpty() && searchQuery.isNotBlank() && filteredVideos.isEmpty()) {
+                item {
+                    Text("No downloads match your search.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            items(filteredVideos, key = { it.uri.toString() }) { video ->
                 VideoRow(
                     video = video,
                     onOpen = {
-                        val mime = VideoStore.mimeFor(video.name.substringAfterLast('.', "mp4"))
-                        try {
-                            context.startActivity(VideoStore.viewIntent(context, video.uri, mime))
-                        } catch (_: ActivityNotFoundException) {
-                            Toast.makeText(context, "No video player installed", Toast.LENGTH_SHORT).show()
-                        }
+                        val title = video.name.substringBeforeLast('.')
+                        context.startActivity(PlayerActivity.playIntent(context, video.uri, title))
                     },
                     onDelete = { toDelete = video },
                 )
