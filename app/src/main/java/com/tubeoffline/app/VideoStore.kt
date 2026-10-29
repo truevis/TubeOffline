@@ -130,6 +130,22 @@ object VideoStore {
         return result
     }
 
+    /**
+     * Next library row after [uri] (same order as the main list: newest first).
+     * [skip] can omit already-watched items for autoplay; if every later row is
+     * skipped, returns null so playback stops instead of looping.
+     */
+    fun nextAfter(
+        context: Context,
+        uri: Uri,
+        skip: (SavedVideo) -> Boolean = { false },
+    ): SavedVideo? {
+        val videos = list(context)
+        val index = videos.indexOfFirst { it.uri == uri }
+        if (index < 0) return null
+        return videos.asSequence().drop(index + 1).firstOrNull { !skip(it) }
+    }
+
     sealed interface DeleteResult {
         data object Deleted : DeleteResult
         /** File belongs to an older install: the user has to confirm via this system dialog. */
@@ -160,12 +176,38 @@ object VideoStore {
 
     private fun permanentlyDelete(context: Context, uri: Uri) {
         val resolver = context.contentResolver
+        // Owned content is removed for good on the first delete. A blind second delete
+        // against the now-missing Uri throws on Pixel / Android 11+ and was crashing the UI.
         resolver.delete(uri, null, null)
-        if (Build.VERSION.SDK_INT >= 30) {
-            val extras = Bundle().apply {
-                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
-            }
-            resolver.delete(uri, extras)
+        if (Build.VERSION.SDK_INT < 30) return
+        if (!existsIncludingTrashed(context, uri)) return
+        val extras = Bundle().apply {
+            putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
         }
+        runCatching { resolver.delete(uri, extras) }
+    }
+
+    private fun existsIncludingTrashed(context: Context, uri: Uri): Boolean {
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val extras = Bundle().apply {
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                }
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.Video.Media._ID),
+                    extras,
+                    null,
+                )?.use { it.moveToFirst() } == true
+            } else {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.Video.Media._ID),
+                    null,
+                    null,
+                    null,
+                )?.use { it.moveToFirst() } == true
+            }
+        }.getOrDefault(false)
     }
 }

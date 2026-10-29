@@ -18,6 +18,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,14 +36,15 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -50,13 +52,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +71,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -95,6 +98,7 @@ internal fun AppTheme(content: @Composable () -> Unit) {
 @Composable
 private fun MainScreen() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val status by DownloadService.status.collectAsStateWithLifecycle()
     val nowPlaying by PlaybackService.nowPlaying.collectAsStateWithLifecycle()
 
@@ -103,9 +107,11 @@ private fun MainScreen() {
     var refreshKey by remember { mutableIntStateOf(0) }
     var toDelete by remember { mutableStateOf<SavedVideo?>(null) }
     var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
     var pasted by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var freeBytes by remember { mutableStateOf<Long?>(null) }
+    var autoplay by remember { mutableStateOf(AppPreferences.isAutoplayEnabled(context)) }
 
     val filteredVideos = remember(videos, searchQuery) {
         val q = searchQuery.trim()
@@ -114,6 +120,11 @@ private fun MainScreen() {
 
     val refresh = { refreshKey++ }
 
+    fun cleanupDeleted(uri: Uri, youTubeId: String?) {
+        PlaybackPositionStore.clear(context, uri)
+        ThumbnailCache.delete(context, youTubeId)
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { refresh() }
@@ -121,9 +132,13 @@ private fun MainScreen() {
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            pendingDeleteUri?.let { PlaybackPositionStore.clear(context, it) }
+            pendingDeleteUri?.let { uri ->
+                PlaybackService.stopIfPlaying(uri)
+                cleanupDeleted(uri, pendingDeleteYouTubeId)
+            }
         }
         pendingDeleteUri = null
+        pendingDeleteYouTubeId = null
         refresh()
     }
 
@@ -138,7 +153,10 @@ private fun MainScreen() {
         }
         permissionLauncher.launch(perms.toTypedArray())
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        autoplay = AppPreferences.isAutoplayEnabled(context)
+        refresh()
+    }
     LaunchedEffect(refreshKey, status.finishedCount) {
         val listed = withContext(Dispatchers.IO) {
             try { VideoStore.list(context) } catch (_: Exception) { emptyList() }
@@ -160,8 +178,25 @@ private fun MainScreen() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text("TubeOffline")
+                title = { Text("TubeOffline") },
+                actions = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) {
+                        Text(
+                            "Autoplay",
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(end = 4.dp),
+                        )
+                        Switch(
+                            checked = autoplay,
+                            onCheckedChange = { enabled ->
+                                autoplay = enabled
+                                AppPreferences.setAutoplayEnabled(context, enabled)
+                            },
+                        )
+                    }
                 },
             )
         },
@@ -344,17 +379,32 @@ private fun MainScreen() {
             confirmButton = {
                 TextButton(onClick = {
                     toDelete = null
-                    when (val r = VideoStore.delete(context, video.uri)) {
-                        VideoStore.DeleteResult.Deleted -> {
-                            PlaybackPositionStore.clear(context, video.uri)
-                            refresh()
+                    videos = videos.filter { it.uri != video.uri }
+                    completedUris = completedUris - video.uri.toString()
+                    scope.launch {
+                        PlaybackService.stopIfPlaying(video.uri)
+                        val result = withContext(Dispatchers.IO) {
+                            VideoStore.delete(context, video.uri)
                         }
-                        is VideoStore.DeleteResult.NeedsConfirmation -> {
-                            pendingDeleteUri = video.uri
-                            deleteLauncher.launch(IntentSenderRequest.Builder(r.intentSender).build())
+                        when (result) {
+                            VideoStore.DeleteResult.Deleted -> {
+                                cleanupDeleted(video.uri, video.youTubeId)
+                                refresh()
+                            }
+                            is VideoStore.DeleteResult.NeedsConfirmation -> {
+                                pendingDeleteUri = video.uri
+                                pendingDeleteYouTubeId = video.youTubeId
+                                deleteLauncher.launch(IntentSenderRequest.Builder(result.intentSender).build())
+                            }
+                            is VideoStore.DeleteResult.Failed -> {
+                                Toast.makeText(
+                                    context,
+                                    "Couldn't delete: ${result.message}",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                refresh()
+                            }
                         }
-                        is VideoStore.DeleteResult.Failed ->
-                            Toast.makeText(context, "Couldn't delete: ${r.message}", Toast.LENGTH_LONG).show()
                     }
                 }) { Text("Delete") }
             },
@@ -372,7 +422,10 @@ private fun VideoRow(
     onDelete: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
-        Row(Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             YouTubeThumbnail(video.youTubeId)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
