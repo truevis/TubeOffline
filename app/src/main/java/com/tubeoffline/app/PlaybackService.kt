@@ -203,7 +203,11 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
 
         private fun maybeAutoplayNext(context: android.content.Context, player: Player, endedUri: Uri) {
             if (!AppPreferences.isAutoplayEnabled(context)) return
-            val next = runCatching { VideoStore.nextAfter(context, endedUri) }.getOrNull() ?: return
+            val next = runCatching {
+                VideoStore.nextAfter(context, endedUri) { video ->
+                    PlaybackPositionStore.isCompleted(context, video.uri)
+                }
+            }.getOrNull() ?: return
             val title = next.name.substringBeforeLast('.')
             val item = mediaItem(next.uri, title)
             runCatching {

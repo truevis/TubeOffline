@@ -130,12 +130,20 @@ object VideoStore {
         return result
     }
 
-    /** Next library row after [uri] (same order as the main list: newest first). */
-    fun nextAfter(context: Context, uri: Uri): SavedVideo? {
+    /**
+     * Next library row after [uri] (same order as the main list: newest first).
+     * [skip] can omit already-watched items for autoplay; if every later row is
+     * skipped, returns null so playback stops instead of looping.
+     */
+    fun nextAfter(
+        context: Context,
+        uri: Uri,
+        skip: (SavedVideo) -> Boolean = { false },
+    ): SavedVideo? {
         val videos = list(context)
         val index = videos.indexOfFirst { it.uri == uri }
         if (index < 0) return null
-        return videos.getOrNull(index + 1)
+        return videos.asSequence().drop(index + 1).firstOrNull { !skip(it) }
     }
 
     sealed interface DeleteResult {
