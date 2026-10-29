@@ -20,6 +20,8 @@ data class SavedVideo(
     val sizeBytes: Long,
     val durationMs: Long,
     val dateAddedSec: Long,
+    /** YouTube upload time in unix seconds. Null for downloads saved before this was recorded. */
+    val uploadedEpochSec: Long? = null,
 )
 
 /** Movies/TubeOffline via MediaStore (scoped storage, no storage permission needed to write). */
@@ -66,7 +68,13 @@ object VideoStore {
     }
 
     /** Copies [source] into Movies/TubeOffline and returns its content Uri. */
-    fun save(context: Context, source: File, title: String, youTubeId: String? = null): Uri {
+    fun save(
+        context: Context,
+        source: File,
+        title: String,
+        youTubeId: String? = null,
+        uploadedEpochSec: Long? = null,
+    ): Uri {
         val ext = source.extension.ifBlank { "mp4" }
         val resolver = context.contentResolver
         val values = ContentValues().apply {
@@ -74,7 +82,9 @@ object VideoStore {
             put(MediaStore.Video.Media.MIME_TYPE, mimeFor(ext))
             put(MediaStore.Video.Media.RELATIVE_PATH, RELATIVE_DIR)
             put(MediaStore.Video.Media.TITLE, title)
-            youTubeId?.let { put(MediaStore.Video.Media.DESCRIPTION, "youtube:$it") }
+            UploadLabel.description(youTubeId, uploadedEpochSec)?.let {
+                put(MediaStore.Video.Media.DESCRIPTION, it)
+            }
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(collection(), values)
@@ -115,15 +125,15 @@ object VideoStore {
             val durCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
             val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
             while (c.moveToNext()) {
+                val description = c.getString(descriptionCol)
                 result += SavedVideo(
                     uri = ContentUris.withAppendedId(collection(), c.getLong(idCol)),
                     name = c.getString(nameCol) ?: "video",
-                    youTubeId = c.getString(descriptionCol)
-                        ?.removePrefix("youtube:")
-                        ?.takeIf { c.getString(descriptionCol)?.startsWith("youtube:") == true },
+                    youTubeId = UploadLabel.youTubeId(description),
                     sizeBytes = c.getLong(sizeCol),
                     durationMs = c.getLong(durCol),
                     dateAddedSec = c.getLong(dateCol),
+                    uploadedEpochSec = UploadLabel.uploadedEpochSec(description),
                 )
             }
         }

@@ -37,7 +37,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -313,7 +312,6 @@ private fun MainScreen() {
             }
 
             item {
-                HorizontalDivider()
                 val q = searchQuery.trim()
                 val heading = when {
                     videos.isEmpty() -> "Your library is empty"
@@ -353,7 +351,9 @@ private fun MainScreen() {
                     played = video.uri.toString() in completedUris,
                     onOpen = {
                         val title = video.name.substringBeforeLast('.')
-                        context.startActivity(PlayerActivity.playIntent(context, video.uri, title))
+                        context.startActivity(
+                            PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
+                        )
                     },
                     onShare = video.youTubeId?.let { id ->
                         {
@@ -442,6 +442,9 @@ private fun VideoRow(
                 val parts = buildList {
                     add(formatSize(video.sizeBytes))
                     if (video.durationMs > 0) add(DateUtils.formatElapsedTime(video.durationMs / 1000))
+                    video.uploadedEpochSec?.let { uploaded ->
+                        add(UploadLabel.relative(uploaded, System.currentTimeMillis() / 1000))
+                    }
                 }
                 Text(parts.joinToString(" • "), style = MaterialTheme.typography.bodySmall)
             }

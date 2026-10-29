@@ -30,7 +30,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -148,21 +148,33 @@ class PlayerActivity : ComponentActivity() {
     companion object {
         const val EXTRA_URI = "uri"
         const val EXTRA_TITLE = "title"
+        const val EXTRA_PLAY_IMMEDIATELY = "playImmediately"
 
-        fun playIntent(context: Context, uri: Uri, title: String): Intent =
+        fun playIntent(
+            context: Context,
+            uri: Uri,
+            title: String,
+            playImmediately: Boolean = false,
+        ): Intent =
             Intent(context, PlayerActivity::class.java)
                 .putExtra(EXTRA_URI, uri.toString())
                 .putExtra(EXTRA_TITLE, title)
+                .putExtra(EXTRA_PLAY_IMMEDIATELY, playImmediately)
 
         fun playRequestFrom(intent: Intent): PlayRequest? {
             val uriString = intent.getStringExtra(EXTRA_URI) ?: return null
             val title = intent.getStringExtra(EXTRA_TITLE) ?: "Video"
-            return PlayRequest(Uri.parse(uriString), title)
+            val playImmediately = intent.getBooleanExtra(EXTRA_PLAY_IMMEDIATELY, false)
+            return PlayRequest(Uri.parse(uriString), title, playImmediately)
         }
     }
 }
 
-data class PlayRequest(val uri: Uri, val title: String)
+data class PlayRequest(
+    val uri: Uri,
+    val title: String,
+    val playImmediately: Boolean = false,
+)
 
 @UnstableApi
 @Composable
@@ -261,17 +273,21 @@ private fun PlayerScreen(
         val c = controller ?: return@LaunchedEffect
         val req = playRequest ?: return@LaunchedEffect
         val savedMs = PlaybackPositionStore.getPositionMs(context, req.uri)
-        val startPaused = PlaybackPositionStore.wasPaused(context, req.uri)
+        val startPaused = !req.playImmediately && PlaybackPositionStore.wasPaused(context, req.uri)
         val mediaId = req.uri.toString()
         val alreadyLoaded = c.currentMediaItem?.mediaId == mediaId &&
             c.playbackState != Player.STATE_IDLE
+        val wantsPlay = !startPaused
         if (alreadyLoaded) {
-            if (abs(c.currentPosition - savedMs) > 500) c.seekTo(savedMs)
-            c.playWhenReady = !startPaused
+            // A transition listener syncs playRequest after setMediaItem. Do not
+            // seek or pause a player that is already running that item.
+            if (!c.isPlaying && abs(c.currentPosition - savedMs) > 500) c.seekTo(savedMs)
+            if (wantsPlay) c.playWhenReady = true
+            else if (!c.isPlaying) c.playWhenReady = false
         } else {
             c.setMediaItem(PlaybackService.mediaItem(req.uri, req.title), savedMs)
             c.prepare()
-            c.playWhenReady = !startPaused
+            c.playWhenReady = wantsPlay
         }
     }
 
@@ -279,10 +295,13 @@ private fun PlayerScreen(
         val c = controller ?: return@DisposableEffect onDispose {}
         playbackSpeed = c.playbackParameters.speed
         // Keep chrome title / playRequest in sync when autoplay advances the queue.
+        // Do not replace an incoming library request with whatever the session
+        // still has loaded. Only refresh the title once that request is current.
         c.currentMediaItem?.let { item ->
-            val title = item.mediaMetadata.title?.toString() ?: playRequest?.title ?: "Video"
-            val synced = PlayRequest(Uri.parse(item.mediaId), title)
-            if (playRequest?.uri != synced.uri) playRequest = synced
+            val current = playRequest ?: return@let
+            if (Uri.parse(item.mediaId) != current.uri) return@let
+            val title = item.mediaMetadata.title?.toString() ?: return@let
+            if (title != current.title) playRequest = current.copy(title = title)
         }
         val listener = object : Player.Listener {
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -291,8 +310,11 @@ private fun PlayerScreen(
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 val item = mediaItem ?: return
+                val uri = Uri.parse(item.mediaId)
                 val title = item.mediaMetadata.title?.toString() ?: "Video"
-                playRequest = PlayRequest(Uri.parse(item.mediaId), title)
+                val keepImmediate = playRequest?.playImmediately == true && playRequest?.uri == uri
+                val next = PlayRequest(uri, title, playImmediately = keepImmediate)
+                if (next != playRequest) playRequest = next
             }
         }
         c.addListener(listener)
@@ -404,9 +426,13 @@ private fun PlayerScreen(
                         }
                     }
                 }
-                if (isLandscape) {
+                if (!isLandscape) {
                     IconButton(onClick = { confirmDelete = true }) {
-                        Icon(Icons.Outlined.Delete, contentDescription = "Delete video")
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = "Delete video",
+                            tint = MaterialTheme.colorScheme.inverseOnSurface,
+                        )
                     }
                 }
                 IconButton(onClick = onDismiss) {
@@ -432,6 +458,12 @@ private fun PlayerScreen(
                     TextButton(onClick = {
                         confirmDelete = false
                         val current = playRequest ?: return@TextButton
+                        controller?.let {
+                            runCatching {
+                                it.stop()
+                                it.clearMediaItems()
+                            }
+                        }
                         scope.launch {
                             PlaybackService.stopIfPlaying(current.uri)
                             val youTubeId = withContext(Dispatchers.IO) {

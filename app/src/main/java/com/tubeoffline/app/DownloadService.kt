@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.File
 import java.util.ArrayDeque
 
@@ -134,6 +135,7 @@ class DownloadService : Service() {
                 addOption("--no-mtime")
                 addOption("--newline")
                 addOption("--cache-dir", File(cacheDir, "yt-dlp-cache").absolutePath)
+                addOption("--write-info-json")
                 addOption("-o", File(workDir, "%(title).150B.%(ext)s").absolutePath)
             }
 
@@ -158,7 +160,8 @@ class DownloadService : Service() {
             title = output.nameWithoutExtension
             goForeground("Saving to Movies/TubeOffline…", null)
             val youTubeId = YouTubeUrl.videoId(url)
-            val uri = VideoStore.save(this, output, title, youTubeId)
+            val uploadedEpochSec = readUploadEpoch(workDir)
+            val uri = VideoStore.save(this, output, title, youTubeId, uploadedEpochSec)
             youTubeId?.let { id -> ThumbnailCache.ensureCached(this, id) }
             Notifications.success(this, VideoStore.sanitizeFileName(title), uri, output.length())
             publish { it.copy(lastMessage = "Saved: $title") }
@@ -184,6 +187,23 @@ class DownloadService : Service() {
             currentProcessId = null
             workDir.deleteRecursively()
             publish { it.copy(active = false, percent = null, finishedCount = it.finishedCount + 1) }
+        }
+    }
+
+    /** YouTube upload time from the info JSON yt-dlp already wrote for this download. */
+    private fun readUploadEpoch(workDir: File): Long? {
+        val info = workDir.walkTopDown().firstOrNull { it.isFile && it.name.endsWith(".info.json") }
+            ?: return null
+        return try {
+            val json = JSONObject(info.readText())
+            UploadLabel.epochFromYoutube(
+                timestamp = json.optLong("timestamp", 0L),
+                releaseTimestamp = json.optLong("release_timestamp", 0L),
+                uploadDate = json.optString("upload_date", "").takeIf { it.isNotEmpty() },
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "Could not read upload date", e)
+            null
         }
     }
 
