@@ -3,10 +3,12 @@ package com.tubeoffline.app
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -40,7 +42,7 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(15_000)
             .build()
-        player.addListener(PlaybackProgressListener(this, player))
+        player.addListener(PlaybackProgressListener(this, player) { mediaSession })
         val openPlayer = PendingIntent.getActivity(
             this,
             0,
@@ -52,6 +54,8 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             .setSessionActivity(openPlayer)
             .setCallback(this)
             .build()
+        activePlayer = player
+        activeSession = mediaSession
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
@@ -85,6 +89,8 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
 
     override fun onDestroy() {
         _nowPlaying.value = null
+        if (activePlayer === mediaSession?.player) activePlayer = null
+        if (activeSession === mediaSession) activeSession = null
         mediaSession?.run {
             player.release()
             release()
@@ -96,6 +102,7 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
     private class PlaybackProgressListener(
         private val context: android.content.Context,
         private val player: Player,
+        private val sessionProvider: () -> MediaSession?,
     ) : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             updateNowPlaying(player)
@@ -115,7 +122,10 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             val item = player.currentMediaItem ?: return
             val uri = Uri.parse(item.mediaId)
             when (playbackState) {
-                Player.STATE_ENDED -> PlaybackPositionStore.markCompleted(context, uri)
+                Player.STATE_ENDED -> {
+                    PlaybackPositionStore.markCompleted(context, uri)
+                    maybeAutoplayNext(context, player, uri)
+                }
                 Player.STATE_READY -> PlaybackPositionStore.record(
                     context,
                     uri,
@@ -125,11 +135,33 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
                 )
             }
         }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            updateNowPlaying(player)
+            mediaItem?.let { refreshSessionActivity(context, sessionProvider(), it) }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "Playback error", error)
+            runCatching {
+                player.stop()
+                player.clearMediaItems()
+            }
+            updateNowPlaying(player)
+        }
     }
 
     companion object {
+        private const val TAG = "PlaybackService"
+
         private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
         val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
+
+        @Volatile
+        private var activePlayer: Player? = null
+
+        @Volatile
+        private var activeSession: MediaSession? = null
 
         private fun updateNowPlaying(player: Player) {
             val item = player.currentMediaItem
@@ -144,6 +176,21 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             }
         }
 
+        /**
+         * Stops and clears the player when [uri] is the current item. Call this before
+         * deleting a MediaStore file so ExoPlayer is not holding a dead Uri.
+         */
+        fun stopIfPlaying(uri: Uri) {
+            val player = activePlayer ?: return
+            val current = player.currentMediaItem?.mediaId ?: return
+            if (current != uri.toString()) return
+            runCatching {
+                player.stop()
+                player.clearMediaItems()
+            }
+            _nowPlaying.value = null
+        }
+
         fun mediaItem(uri: Uri, title: String): MediaItem = MediaItem.Builder()
             .setMediaId(uri.toString())
             .setMediaMetadata(
@@ -153,6 +200,47 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
                     .build(),
             )
             .build()
+
+        private fun maybeAutoplayNext(context: android.content.Context, player: Player, endedUri: Uri) {
+            if (!AppPreferences.isAutoplayEnabled(context)) return
+            val next = runCatching { VideoStore.nextAfter(context, endedUri) }.getOrNull() ?: return
+            val title = next.name.substringBeforeLast('.')
+            val item = mediaItem(next.uri, title)
+            runCatching {
+                player.setMediaItem(resolveForPlayer(item))
+                player.prepare()
+                player.playWhenReady = true
+                refreshSessionActivity(context, activeSession, item)
+                updateNowPlaying(player)
+            }.onFailure { Log.e(TAG, "Autoplay next failed", it) }
+        }
+
+        private fun resolveForPlayer(item: MediaItem): MediaItem {
+            val uri = Uri.parse(item.mediaId)
+            val ext = uri.lastPathSegment?.substringAfterLast('.', "") ?: "mp4"
+            return item.buildUpon()
+                .setUri(uri)
+                .setMimeType(VideoStore.mimeFor(ext))
+                .build()
+        }
+
+        private fun refreshSessionActivity(
+            context: android.content.Context,
+            session: MediaSession?,
+            item: MediaItem,
+        ) {
+            val sessionRef = session ?: activeSession ?: return
+            val uri = Uri.parse(item.mediaId)
+            val title = item.mediaMetadata.title?.toString() ?: "Video"
+            val openPlayer = PendingIntent.getActivity(
+                context,
+                0,
+                PlayerActivity.playIntent(context, uri, title)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            runCatching { sessionRef.setSessionActivity(openPlayer) }
+        }
     }
 }
 

@@ -57,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -229,9 +230,21 @@ private fun PlayerScreen(
     DisposableEffect(controller) {
         val c = controller ?: return@DisposableEffect onDispose {}
         playbackSpeed = c.playbackParameters.speed
+        // Keep chrome title / playRequest in sync when autoplay advances the queue.
+        c.currentMediaItem?.let { item ->
+            val title = item.mediaMetadata.title?.toString() ?: playRequest?.title ?: "Video"
+            val synced = PlayRequest(Uri.parse(item.mediaId), title)
+            if (playRequest?.uri != synced.uri) playRequest = synced
+        }
         val listener = object : Player.Listener {
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                 playbackSpeed = playbackParameters.speed
+            }
+
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val item = mediaItem ?: return
+                val title = item.mediaMetadata.title?.toString() ?: "Video"
+                playRequest = PlayRequest(Uri.parse(item.mediaId), title)
             }
         }
         c.addListener(listener)
