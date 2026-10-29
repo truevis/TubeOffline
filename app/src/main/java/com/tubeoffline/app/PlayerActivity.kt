@@ -1,6 +1,7 @@
 package com.tubeoffline.app
 
 import android.app.PictureInPictureParams
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,6 +13,9 @@ import android.util.Rational
 import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -26,6 +30,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -38,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -71,6 +78,9 @@ import com.google.common.util.concurrent.MoreExecutors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PlayerActivity : ComponentActivity() {
 
@@ -171,8 +181,44 @@ private fun PlayerScreen(
     var controllerVisible by remember { mutableStateOf(true) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var speedMenuOpen by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val showTitleRow = !inPictureInPicture && (!isLandscape || controllerVisible)
+
+    fun cleanupDeleted(uri: Uri, youTubeId: String?) {
+        PlaybackPositionStore.clear(context, uri)
+        ThumbnailCache.delete(context, youTubeId)
+    }
+
+    fun finishAfterDelete() {
+        controller?.let {
+            runCatching {
+                it.stop()
+                it.clearMediaItems()
+            }
+        }
+        activity.finish()
+    }
+
+    val deleteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            pendingDeleteUri?.let { uri ->
+                PlaybackService.stopIfPlaying(uri)
+                cleanupDeleted(uri, pendingDeleteYouTubeId)
+                pendingDeleteUri = null
+                pendingDeleteYouTubeId = null
+                finishAfterDelete()
+                return@rememberLauncherForActivityResult
+            }
+        }
+        pendingDeleteUri = null
+        pendingDeleteYouTubeId = null
+    }
 
     if (playRequest == null) {
         LaunchedEffect(Unit) {
@@ -358,6 +404,11 @@ private fun PlayerScreen(
                         }
                     }
                 }
+                if (isLandscape) {
+                    IconButton(onClick = { confirmDelete = true }) {
+                        Icon(Icons.Outlined.Delete, contentDescription = "Delete video")
+                    }
+                }
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Filled.Close, contentDescription = "Dismiss")
                 }
@@ -365,6 +416,59 @@ private fun PlayerScreen(
                     Icon(StopIcon, contentDescription = "Stop")
                 }
             }
+        }
+
+        if (confirmDelete) {
+            val title = playRequest?.title ?: "This video"
+            AlertDialog(
+                onDismissRequest = { confirmDelete = false },
+                title = { Text("Delete video?") },
+                text = {
+                    Text(
+                        "$title\n\nThis permanently deletes the file from Movies/TubeOffline. It is not sent to trash.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmDelete = false
+                        val current = playRequest ?: return@TextButton
+                        scope.launch {
+                            PlaybackService.stopIfPlaying(current.uri)
+                            val youTubeId = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    VideoStore.list(context).firstOrNull { it.uri == current.uri }?.youTubeId
+                                }.getOrNull()
+                            }
+                            val result = withContext(Dispatchers.IO) {
+                                VideoStore.delete(context, current.uri)
+                            }
+                            when (result) {
+                                VideoStore.DeleteResult.Deleted -> {
+                                    cleanupDeleted(current.uri, youTubeId)
+                                    finishAfterDelete()
+                                }
+                                is VideoStore.DeleteResult.NeedsConfirmation -> {
+                                    pendingDeleteUri = current.uri
+                                    pendingDeleteYouTubeId = youTubeId
+                                    deleteLauncher.launch(
+                                        IntentSenderRequest.Builder(result.intentSender).build(),
+                                    )
+                                }
+                                is VideoStore.DeleteResult.Failed -> {
+                                    Toast.makeText(
+                                        context,
+                                        "Couldn't delete: ${result.message}",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            }
+                        }
+                    }) { Text("Delete") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmDelete = false }) { Text("Keep") }
+                },
+            )
         }
     }
 }
