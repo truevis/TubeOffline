@@ -14,12 +14,6 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- So a tap can open the Pixel's own video player instead of a chooser. -->
-    <queries>
-        <package android:name="com.google.android.apps.photos" />
-        <package android:name="com.google.android.apps.nbu.files" />
-    </queries>
-
     <application
         android:name=".TubeOfflineApp"
         android:allowBackup="false"
