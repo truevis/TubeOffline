@@ -312,8 +312,18 @@ private fun PlayerScreen(
                 val item = mediaItem ?: return
                 val uri = Uri.parse(item.mediaId)
                 val title = item.mediaMetadata.title?.toString() ?: "Video"
-                val keepImmediate = playRequest?.playImmediately == true && playRequest?.uri == uri
-                val next = PlayRequest(uri, title, playImmediately = keepImmediate)
+                val current = playRequest
+                // PlaybackService.maybeAutoplayNext swaps the item without a new
+                // PlayRequest. A library tap or notification resume updates
+                // playRequest first, so the URI already matches and a saved pause
+                // is left alone. An external advance must start playing.
+                val autoAdvanced = current != null && current.uri != uri
+                val keepImmediate = current?.playImmediately == true && current.uri == uri
+                val next = PlayRequest(
+                    uri,
+                    title,
+                    playImmediately = autoAdvanced || keepImmediate,
+                )
                 if (next != playRequest) playRequest = next
             }
         }
