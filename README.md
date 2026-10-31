@@ -14,8 +14,8 @@ Repository: https://github.com/truevis/TubeOffline
 - Files go to `Movies/TubeOffline/<title>.mp4` through MediaStore, so other apps can see them. The YouTube id is stored with the file for the thumbnail and the original link.
 - If the bundled yt-dlp is missing or older than about 60 days, the download service updates it from GitHub before starting.
 - Library: free space, search, thumbnail, title (dimmed after you finish a video), relative upload age when it was recorded, share of the original `watch?v=` link, and delete. Delete removes the file; it is not sent to trash. Videos saved before upload time was recorded have no age label.
-- Player (Media3): resume, 10s back and 15s forward, playback speed from 0.5× to 3×, picture-in-picture when you leave while it is playing, and background audio. **Dismiss** leaves playback running; **Stop** ends it. A **Now playing** card returns you to the current video.
-- **Autoplay** is off until you turn it on. When on, the next library item plays after the current one ends, skipping videos already marked finished.
+- Player (Media3): resume, 10s back and 15s forward, **previous/next** to move through downloaded videos (same order as the library list, newest first; no wrap at the ends), playback speed from 0.5× to 3×, picture-in-picture when you leave while it is playing, and background audio. **Dismiss** leaves playback running; **Stop** ends it. A **Now playing** card returns you to the current video. Skip controls are in the top bar and on the Media3 transport overlay; the media notification can skip as well.
+- **Autoplay** is off until you turn it on. When on, the next library item plays after the current one ends, skipping videos already marked finished (manual prev/next always plays the adjacent file, even if you already finished it).
 
 ## Build
 

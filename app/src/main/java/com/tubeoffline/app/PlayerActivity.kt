@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -427,10 +428,14 @@ private fun PlayerScreen(
                     TextButton(
                         onClick = { speedMenuOpen = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                        ),
                     ) {
                         Text(
                             formatPlaybackSpeed(playbackSpeed),
                             style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
                         )
                     }
                     DropdownMenu(
