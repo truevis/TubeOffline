@@ -196,6 +196,8 @@ private fun PlayerScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
     var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
+    var hasPreviousVideo by remember { mutableStateOf(false) }
+    var hasNextVideo by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val showTitleRow = !inPictureInPicture && (!isLandscape || controllerVisible)
@@ -331,6 +333,23 @@ private fun PlayerScreen(
         onDispose { c.removeListener(listener) }
     }
 
+
+    LaunchedEffect(playRequest?.uri) {
+        val uri = playRequest?.uri
+        if (uri == null) {
+            hasPreviousVideo = false
+            hasNextVideo = false
+            return@LaunchedEffect
+        }
+        val (prev, next) = withContext(Dispatchers.IO) {
+            val hasPrev = runCatching { VideoStore.previousBefore(context, uri) != null }.getOrDefault(false)
+            val hasNext = runCatching { VideoStore.nextAfter(context, uri) != null }.getOrDefault(false)
+            hasPrev to hasNext
+        }
+        hasPreviousVideo = prev
+        hasNextVideo = next
+    }
+
     val currentController by rememberUpdatedState(controller)
     val currentPlayerView by rememberUpdatedState(playerView)
 
@@ -363,6 +382,8 @@ private fun PlayerScreen(
                     useController = !inPictureInPicture
                     setShowRewindButton(true)
                     setShowFastForwardButton(true)
+                    setShowPreviousButton(true)
+                    setShowNextButton(true)
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
                             controllerVisible = visibility == View.VISIBLE
@@ -435,6 +456,26 @@ private fun PlayerScreen(
                             )
                         }
                     }
+                }
+                IconButton(
+                    onClick = { controller?.seekToPrevious() },
+                    enabled = hasPreviousVideo,
+                ) {
+                    Icon(
+                        SkipPreviousIcon,
+                        contentDescription = "Previous video",
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                    )
+                }
+                IconButton(
+                    onClick = { controller?.seekToNext() },
+                    enabled = hasNextVideo,
+                ) {
+                    Icon(
+                        SkipNextIcon,
+                        contentDescription = "Next video",
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                    )
                 }
                 if (!isLandscape) {
                     IconButton(onClick = { confirmDelete = true }) {
@@ -539,6 +580,46 @@ private val StopIcon: ImageVector = ImageVector.Builder(
         lineTo(18f, 6f)
         lineTo(18f, 18f)
         lineTo(6f, 18f)
+        close()
+    }
+}.build()
+
+private val SkipPreviousIcon: ImageVector = ImageVector.Builder(
+    name = "SkipPrevious",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(6f, 6f)
+        lineTo(8f, 6f)
+        lineTo(8f, 18f)
+        lineTo(6f, 18f)
+        close()
+        moveTo(9.5f, 12f)
+        lineTo(18f, 6f)
+        lineTo(18f, 18f)
+        close()
+    }
+}.build()
+
+private val SkipNextIcon: ImageVector = ImageVector.Builder(
+    name = "SkipNext",
+    defaultWidth = 24.dp,
+    defaultHeight = 24.dp,
+    viewportWidth = 24f,
+    viewportHeight = 24f,
+).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(6f, 6f)
+        lineTo(14.5f, 12f)
+        lineTo(6f, 18f)
+        close()
+        moveTo(16f, 6f)
+        lineTo(18f, 6f)
+        lineTo(18f, 18f)
+        lineTo(16f, 18f)
         close()
     }
 }.build()
