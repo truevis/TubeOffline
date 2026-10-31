@@ -51,7 +51,7 @@ object VideoStore {
 
     /**
      * MIME for MediaStore.Video / ExoPlayer.
-     * Never returns a wildcard (`video/*`) — MediaStore throws
+     * Never returns a wildcard MIME (video slash-star) — MediaStore throws
      * IllegalArgumentException("Unsupported MIME type") for those.
      * Unknown / audio-only / matroska extensions fall back to video/mp4 so a remuxed
      * retry can save; [save] still rejects unsafe containers before insert when possible.
