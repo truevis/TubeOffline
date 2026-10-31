@@ -27,6 +27,15 @@ data class SavedVideo(
 object VideoStore {
     val RELATIVE_DIR = Environment.DIRECTORY_MOVIES + "/TubeOffline/"
 
+    /**
+     * Thrown when MediaStore.Video rejects the file's MIME/container.
+     * DownloadService catches this and retries with a safer mp4 format.
+     */
+    class UnsupportedMimeException(
+        message: String,
+        cause: Throwable? = null,
+    ) : IllegalArgumentException(message, cause)
+
     private fun collection(): Uri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
     /** Makes a title safe to use as a file name on Android (and Windows, if copied to a PC). */
@@ -40,12 +49,26 @@ object VideoStore {
         return cut.ifBlank { "video" }
     }
 
+    /**
+     * MIME for MediaStore.Video / ExoPlayer.
+     * Never returns a wildcard (`video/*`) — MediaStore throws
+     * IllegalArgumentException("Unsupported MIME type") for those.
+     * Unknown / audio-only / matroska extensions fall back to video/mp4 so a remuxed
+     * retry can save; [save] still rejects unsafe containers before insert when possible.
+     */
     fun mimeFor(ext: String): String = when (ext.lowercase()) {
         "mp4", "m4v" -> "video/mp4"
         "webm" -> "video/webm"
-        "mkv" -> "video/x-matroska"
-        "3gp" -> "video/3gpp"
-        else -> "video/*"
+        "3gp", "3gpp" -> "video/3gpp"
+        "mpeg", "mpg" -> "video/mpeg"
+        // Many devices reject video/x-matroska on Video.Media; treat as needing remux.
+        else -> "video/mp4"
+    }
+
+    /** Extensions MediaStore.Video reliably accepts on current Pixel / AOSP. */
+    fun isMediaStoreSafeExt(ext: String): Boolean = when (ext.lowercase()) {
+        "mp4", "m4v", "webm", "3gp", "3gpp", "mpeg", "mpg" -> true
+        else -> false
     }
 
     /** Copies [source] into Movies/TubeOffline and returns its content Uri. */
@@ -56,11 +79,18 @@ object VideoStore {
         youTubeId: String? = null,
         uploadedEpochSec: Long? = null,
     ): Uri {
-        val ext = source.extension.ifBlank { "mp4" }
+        val rawExt = source.extension.ifBlank { "mp4" }.lowercase()
+        if (!isMediaStoreSafeExt(rawExt)) {
+            throw UnsupportedMimeException(
+                "Unsupported container .$rawExt for Movies/TubeOffline (MediaStore)",
+            )
+        }
+        val ext = rawExt
+        val mime = mimeFor(ext)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "${sanitizeFileName(title)}.$ext")
-            put(MediaStore.Video.Media.MIME_TYPE, mimeFor(ext))
+            put(MediaStore.Video.Media.MIME_TYPE, mime)
             put(MediaStore.Video.Media.RELATIVE_PATH, RELATIVE_DIR)
             put(MediaStore.Video.Media.TITLE, title)
             UploadLabel.description(youTubeId, uploadedEpochSec)?.let {
@@ -68,8 +98,16 @@ object VideoStore {
             }
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
-        val uri = resolver.insert(collection(), values)
-            ?: throw IllegalStateException("Could not create file in Movies/TubeOffline")
+        val uri = try {
+            resolver.insert(collection(), values)
+                ?: throw IllegalStateException("Could not create file in Movies/TubeOffline")
+        } catch (e: IllegalArgumentException) {
+            // MediaStore: "Unsupported MIME type …"
+            if (e.message?.contains("mime", ignoreCase = true) == true) {
+                throw UnsupportedMimeException(e.message ?: "Unsupported MIME type", e)
+            }
+            throw e
+        }
         try {
             resolver.openOutputStream(uri)?.use { out ->
                 source.inputStream().use { it.copyTo(out, 1 shl 16) }

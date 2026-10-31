@@ -74,6 +74,8 @@ object Engine {
     /**
      * Smallest file that still has picture and English speech.
      * `worstaudio` alone prefers dubbed tracks, because yt-dlp sorts those as worse than the original.
+     * Prefers mp4/m4a so MediaStore.Video accepts the result; later legs may produce webm/mkv and
+     * need [FORMAT_SAFE_MP4] / remux on retry.
      * 1) smallest mp4 video + smallest English m4a (merged to mp4)
      * 2) smallest video + smallest English audio of any container
      * 3) same, but the original / YouTube-default track when the video has no English audio
@@ -88,6 +90,35 @@ object Engine {
             "worstvideo+worstaudio/" +
             "worst[ext=mp4][vcodec!=none][acodec!=none]/" +
             "worst[vcodec!=none][acodec!=none]"
+
+    /**
+     * Retry selector: only progressive / merge paths that stay in mp4 (MediaStore-safe).
+     * Used automatically when the first download saves a container MediaStore rejects.
+     */
+    const val FORMAT_SAFE_MP4 =
+        "worst[ext=mp4][vcodec!=none][acodec!=none]/" +
+            "worstvideo[ext=mp4]+worstaudio[ext=m4a]/" +
+            "best[height<=360][ext=mp4][vcodec!=none][acodec!=none]/" +
+            "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]"
+
+    /** True when a failed download/save should be retried with a safer mp4 format. */
+    fun isRetryableFormatOrMimeError(error: Throwable): Boolean {
+        if (error is VideoStore.UnsupportedMimeException) return true
+        val text = buildString {
+            var cur: Throwable? = error
+            while (cur != null) {
+                append(cur.message.orEmpty()).append('\n')
+                cur = cur.cause
+            }
+        }.lowercase()
+        return "unsupported mime" in text ||
+            "unsupported container" in text ||
+            "requested format is not available" in text ||
+            "format is not available" in text ||
+            "you have requested merging" in text ||
+            "failed to remux" in text ||
+            "error opening output" in text && "mp4" in text
+    }
 
     /** Turns yt-dlp's stderr into something readable for a notification. */
     fun readableError(raw: String?): String {
@@ -106,6 +137,8 @@ object Engine {
             "video unavailable" in lower -> "Video unavailable (removed or region-blocked)."
             "requested format is not available" in lower ->
                 "No downloadable format found."
+            "unsupported mime" in lower ->
+                "Couldn't save this video format to the phone library."
             // 403 text also contains "unable to download", so it has to be matched first.
             "http error 403" in lower || "sabr streaming" in lower ->
                 "YouTube refused the download (403). Try again later."

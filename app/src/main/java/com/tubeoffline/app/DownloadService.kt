@@ -47,6 +47,9 @@ class DownloadService : Service() {
         const val ACTION_CANCEL = "com.tubeoffline.app.CANCEL"
         const val EXTRA_URL = "url"
 
+        /** Initial attempt + up to this many automatic safer-format retries. */
+        private const val MAX_FORMAT_RETRIES = 2
+
         private val _status = MutableStateFlow(DownloadStatus())
         val status: StateFlow<DownloadStatus> = _status.asStateFlow()
 
@@ -57,6 +60,12 @@ class DownloadService : Service() {
             )
         }
     }
+
+    private data class FormatAttempt(
+        val format: String,
+        val remuxToMp4: Boolean,
+        val label: String,
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
@@ -116,78 +125,134 @@ class DownloadService : Service() {
     }
 
     private fun download(url: String) {
-        val workDir = File(cacheDir, "downloads/${System.currentTimeMillis()}").apply { mkdirs() }
+        val attempts = listOf(
+            FormatAttempt(Engine.FORMAT_LOWEST, remuxToMp4 = true, label = "lowest"),
+            FormatAttempt(Engine.FORMAT_SAFE_MP4, remuxToMp4 = true, label = "safe mp4"),
+            FormatAttempt(Engine.FORMAT_SAFE_MP4, remuxToMp4 = true, label = "safe mp4 retry"),
+        ).take(1 + MAX_FORMAT_RETRIES)
+
+        var lastError: Throwable? = null
+        try {
+            for ((index, attempt) in attempts.withIndex()) {
+                if (cancelRequested) {
+                    publish { it.copy(lastMessage = "Cancelled") }
+                    return
+                }
+                val workDir = File(cacheDir, "downloads/${System.currentTimeMillis()}-$index").apply { mkdirs() }
+                try {
+                    if (index > 0) {
+                        Log.w(TAG, "Retry $index/${MAX_FORMAT_RETRIES} with ${attempt.label} after: ${lastError?.message}")
+                        goForeground("Retrying with a safer format…", null)
+                        publish { it.copy(title = "Retrying with a safer format…", percent = null) }
+                    }
+                    downloadOnce(url, workDir, attempt)
+                    return
+                } catch (e: YoutubeDL.CanceledException) {
+                    publish { it.copy(lastMessage = "Cancelled") }
+                    return
+                } catch (e: InterruptedException) {
+                    publish { it.copy(lastMessage = "Cancelled") }
+                    return
+                } catch (e: YoutubeDLException) {
+                    if (cancelRequested) {
+                        publish { it.copy(lastMessage = "Cancelled") }
+                        return
+                    }
+                    lastError = e
+                    if (!Engine.isRetryableFormatOrMimeError(e) || index == attempts.lastIndex) {
+                        Log.e(TAG, "yt-dlp failed", e)
+                        val msg = Engine.readableError(e.message)
+                        Notifications.failure(this, url, msg)
+                        publish { it.copy(lastMessage = "Failed: $msg") }
+                        return
+                    }
+                } catch (e: Throwable) {
+                    if (cancelRequested) {
+                        publish { it.copy(lastMessage = "Cancelled") }
+                        return
+                    }
+                    lastError = e
+                    if (!Engine.isRetryableFormatOrMimeError(e) || index == attempts.lastIndex) {
+                        Log.e(TAG, "Download failed", e)
+                        val msg = if (e is VideoStore.UnsupportedMimeException) {
+                            "Couldn't save this video format to the phone library."
+                        } else {
+                            e.message ?: e.javaClass.simpleName
+                        }
+                        Notifications.failure(this, url, msg)
+                        publish { it.copy(lastMessage = "Failed: $msg") }
+                        return
+                    }
+                } finally {
+                    currentProcessId = null
+                    workDir.deleteRecursively()
+                }
+            }
+        } finally {
+            publish { it.copy(active = false, percent = null, finishedCount = it.finishedCount + 1) }
+        }
+    }
+
+    private fun downloadOnce(url: String, workDir: File, attempt: FormatAttempt) {
         val processId = "dl-${System.nanoTime()}"
         currentProcessId = processId
         var title = YouTubeUrl.videoId(url) ?: url
         goForeground(title, null)
-        try {
-            goForeground("Starting download engine…", null)
-            Engine.refreshIfStale(this) {
-                goForeground("Updating download engine…", null)
-            }
-
-            val request = YoutubeDLRequest(url).apply {
-                addOption("--no-update")
-                addOption("-f", Engine.FORMAT_LOWEST)
-                addOption("--merge-output-format", "mp4")
-                addOption("--no-playlist")
-                addOption("--no-mtime")
-                addOption("--newline")
-                addOption("--cache-dir", File(cacheDir, "yt-dlp-cache").absolutePath)
-                addOption("--write-info-json")
-                addOption("-o", File(workDir, "%(title).150B.%(ext)s").absolutePath)
-            }
-
-            YoutubeDL.getInstance().execute(request, processId) { progress, _, line ->
-                // "[download] Destination: /…/My title.f160.mp4" -> "My title"
-                if (line.contains("Destination:")) {
-                    title = File(line.substringAfter("Destination:").trim()).name
-                        .replace(Regex("""(\.f\d+[^.]*)?\.[A-Za-z0-9]+$"""), "")
-                }
-                val pct = progress.toInt().takeIf { it in 0..100 }
-                val merging = line.contains("[Merger]")
-                publish { it.copy(title = title, percent = if (merging) null else pct) }
-                maybeNotify(if (merging) "Merging audio + video…" else title, if (merging) null else pct)
-            }
-
-            val output = workDir.listFiles()
-                ?.filter { it.isFile && it.length() > 0 && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
-                ?.filterNot { Regex("""\.f\d+[^.]*\.[A-Za-z0-9]+$""").containsMatchIn(it.name) } // leftover unmerged parts
-                ?.maxByOrNull { it.length() }
-                ?: throw IllegalStateException("yt-dlp finished but produced no video file")
-
-            title = output.nameWithoutExtension
-            goForeground("Saving to Movies/TubeOffline…", null)
-            val youTubeId = YouTubeUrl.videoId(url)
-            val uploadedEpochSec = readUploadEpoch(workDir)
-            val uri = VideoStore.save(this, output, title, youTubeId, uploadedEpochSec)
-            youTubeId?.let { id -> ThumbnailCache.ensureCached(this, id) }
-            Notifications.success(this, VideoStore.sanitizeFileName(title), uri, output.length())
-            publish { it.copy(lastMessage = "Saved: $title") }
-        } catch (e: YoutubeDL.CanceledException) {
-            publish { it.copy(lastMessage = "Cancelled") }
-        } catch (e: YoutubeDLException) {
-            if (cancelRequested) {
-                publish { it.copy(lastMessage = "Cancelled") }
-            } else {
-                Log.e(TAG, "yt-dlp failed", e)
-                val msg = Engine.readableError(e.message)
-                Notifications.failure(this, url, msg)
-                publish { it.copy(lastMessage = "Failed: $msg") }
-            }
-        } catch (e: InterruptedException) {
-            publish { it.copy(lastMessage = "Cancelled") }
-        } catch (e: Throwable) {
-            Log.e(TAG, "Download failed", e)
-            val msg = e.message ?: e.javaClass.simpleName
-            Notifications.failure(this, url, msg)
-            publish { it.copy(lastMessage = "Failed: $msg") }
-        } finally {
-            currentProcessId = null
-            workDir.deleteRecursively()
-            publish { it.copy(active = false, percent = null, finishedCount = it.finishedCount + 1) }
+        goForeground("Starting download engine…", null)
+        Engine.refreshIfStale(this) {
+            goForeground("Updating download engine…", null)
         }
+
+        val request = YoutubeDLRequest(url).apply {
+            addOption("--no-update")
+            addOption("-f", attempt.format)
+            addOption("--merge-output-format", "mp4")
+            if (attempt.remuxToMp4) {
+                // Remux webm/mkv merges into mp4 so MediaStore.Video accepts the file.
+                addOption("--remux-video", "mp4")
+            }
+            addOption("--no-playlist")
+            addOption("--no-mtime")
+            addOption("--newline")
+            addOption("--cache-dir", File(cacheDir, "yt-dlp-cache").absolutePath)
+            addOption("--write-info-json")
+            addOption("-o", File(workDir, "%(title).150B.%(ext)s").absolutePath)
+        }
+
+        YoutubeDL.getInstance().execute(request, processId) { progress, _, line ->
+            // "[download] Destination: /…/My title.f160.mp4" -> "My title"
+            if (line.contains("Destination:")) {
+                title = File(line.substringAfter("Destination:").trim()).name
+                    .replace(Regex("""(\.f\d+[^.]*)?\.[A-Za-z0-9]+$"""), "")
+            }
+            val pct = progress.toInt().takeIf { it in 0..100 }
+            val merging = line.contains("[Merger]") || line.contains("[Remux]")
+            publish { it.copy(title = title, percent = if (merging) null else pct) }
+            maybeNotify(
+                when {
+                    line.contains("[Remux]") -> "Converting to mp4…"
+                    merging -> "Merging audio + video…"
+                    else -> title
+                },
+                if (merging) null else pct,
+            )
+        }
+
+        val output = workDir.listFiles()
+            ?.filter { it.isFile && it.length() > 0 && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
+            ?.filterNot { it.name.endsWith(".info.json") }
+            ?.filterNot { Regex("""\.f\d+[^.]*\.[A-Za-z0-9]+$""").containsMatchIn(it.name) } // leftover unmerged parts
+            ?.maxByOrNull { it.length() }
+            ?: throw IllegalStateException("yt-dlp finished but produced no video file")
+
+        title = output.nameWithoutExtension
+        goForeground("Saving to Movies/TubeOffline…", null)
+        val youTubeId = YouTubeUrl.videoId(url)
+        val uploadedEpochSec = readUploadEpoch(workDir)
+        val uri = VideoStore.save(this, output, title, youTubeId, uploadedEpochSec)
+        youTubeId?.let { id -> ThumbnailCache.ensureCached(this, id) }
+        Notifications.success(this, VideoStore.sanitizeFileName(title), uri, output.length())
+        publish { it.copy(lastMessage = "Saved: $title") }
     }
 
     /** YouTube upload time from the info JSON yt-dlp already wrote for this download. */
