@@ -137,6 +137,22 @@ object VideoStore {
         return videos.asSequence().drop(index + 1).firstOrNull { !skip(it) }
     }
 
+    /**
+     * Previous library row before [uri] (same order as the main list: newest first).
+     * Does not wrap: returns null when [uri] is first or missing. [skip] mirrors
+     * [nextAfter] for symmetry; manual prev/next leave it at the default.
+     */
+    fun previousBefore(
+        context: Context,
+        uri: Uri,
+        skip: (SavedVideo) -> Boolean = { false },
+    ): SavedVideo? {
+        val videos = list(context)
+        val index = videos.indexOfFirst { it.uri == uri }
+        if (index <= 0) return null
+        return videos.asSequence().take(index).toList().asReversed().firstOrNull { !skip(it) }
+    }
+
     sealed interface DeleteResult {
         data object Deleted : DeleteResult
         /** File belongs to an older install: the user has to confirm via this system dialog. */

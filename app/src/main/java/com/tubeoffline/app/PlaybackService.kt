@@ -8,6 +8,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -30,7 +31,7 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
     override fun onCreate() {
         super.onCreate()
         setMediaNotificationProvider(DefaultMediaNotificationProvider(this))
-        val player = ExoPlayer.Builder(this)
+        val exo = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -42,6 +43,8 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(15_000)
             .build()
+        // Wrap so Media3 next/prev transport + notification buttons switch library videos.
+        val player = LibraryNavigatingPlayer(this, exo)
         player.addListener(PlaybackProgressListener(this, player) { mediaSession })
         val openPlayer = PendingIntent.getActivity(
             this,
@@ -208,15 +211,50 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
                     PlaybackPositionStore.isCompleted(context, video.uri)
                 }
             }.getOrNull() ?: return
-            val title = next.name.substringBeforeLast('.')
-            val item = mediaItem(next.uri, title)
+            playLibraryVideo(context, player, next)
+        }
+
+        /**
+         * Manual next/prev: adjacent row in [VideoStore] order, no wrap, does not
+         * skip watched items (unlike autoplay). Returns false when already at end.
+         */
+        fun playAdjacent(context: android.content.Context, player: Player, direction: Int): Boolean {
+            val currentUri = player.currentMediaItem?.mediaId?.let(Uri::parse) ?: return false
+            // Persist progress for the video we are leaving.
             runCatching {
+                PlaybackPositionStore.record(
+                    context,
+                    currentUri,
+                    player.currentPosition,
+                    player.duration,
+                    paused = true,
+                )
+            }
+            val adjacent = runCatching {
+                if (direction >= 0) {
+                    VideoStore.nextAfter(context, currentUri)
+                } else {
+                    VideoStore.previousBefore(context, currentUri)
+                }
+            }.getOrNull() ?: return false
+            return playLibraryVideo(context, player, adjacent)
+        }
+
+        private fun playLibraryVideo(
+            context: android.content.Context,
+            player: Player,
+            video: SavedVideo,
+        ): Boolean {
+            val title = video.name.substringBeforeLast('.')
+            val item = mediaItem(video.uri, title)
+            return runCatching {
                 player.setMediaItem(resolveForPlayer(item))
                 player.prepare()
                 player.playWhenReady = true
                 refreshSessionActivity(context, activeSession, item)
                 updateNowPlaying(player)
-            }.onFailure { Log.e(TAG, "Autoplay next failed", it) }
+                true
+            }.onFailure { Log.e(TAG, "playLibraryVideo failed", it) }.getOrDefault(false)
         }
 
         private fun resolveForPlayer(item: MediaItem): MediaItem {
@@ -245,6 +283,51 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
             )
             runCatching { sessionRef.setSessionActivity(openPlayer) }
         }
+    }
+}
+
+/**
+ * Exposes Media3 next/previous commands for the downloaded library so PlayerView
+ * transport controls and the media notification can switch videos. No wrap at ends.
+ */
+@UnstableApi
+private class LibraryNavigatingPlayer(
+    private val appContext: android.content.Context,
+    player: ExoPlayer,
+) : ForwardingPlayer(player) {
+    override fun getAvailableCommands(): Player.Commands =
+        super.getAvailableCommands().buildUpon()
+            .add(COMMAND_SEEK_TO_NEXT)
+            .add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            .add(COMMAND_SEEK_TO_PREVIOUS)
+            .add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            .build()
+
+    override fun seekToNext() {
+        PlaybackService.playAdjacent(appContext, this, +1)
+    }
+
+    override fun seekToNextMediaItem() {
+        PlaybackService.playAdjacent(appContext, this, +1)
+    }
+
+    override fun seekToPrevious() {
+        // Always previous library video (rewind is the separate seek-back control).
+        PlaybackService.playAdjacent(appContext, this, -1)
+    }
+
+    override fun seekToPreviousMediaItem() {
+        PlaybackService.playAdjacent(appContext, this, -1)
+    }
+
+    override fun hasNextMediaItem(): Boolean {
+        val uri = currentMediaItem?.mediaId?.let(Uri::parse) ?: return false
+        return runCatching { VideoStore.nextAfter(appContext, uri) != null }.getOrDefault(false)
+    }
+
+    override fun hasPreviousMediaItem(): Boolean {
+        val uri = currentMediaItem?.mediaId?.let(Uri::parse) ?: return false
+        return runCatching { VideoStore.previousBefore(appContext, uri) != null }.getOrDefault(false)
     }
 }
 
