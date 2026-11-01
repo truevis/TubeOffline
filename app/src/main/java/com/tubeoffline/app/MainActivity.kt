@@ -288,16 +288,31 @@ private fun MainScreen() {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
                             Text("Downloading now", style = MaterialTheme.typography.titleSmall)
-                            Text(status.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.padding(4.dp))
-                            val pct = status.percent
-                            if (pct == null) LinearProgressIndicator(Modifier.fillMaxWidth())
-                            else LinearProgressIndicator(progress = { pct / 100f }, modifier = Modifier.fillMaxWidth())
-                            if (status.queued > 0) {
-                                Text(
-                                    "${status.queued} more waiting in the queue",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                YouTubeThumbnail(status.youTubeId)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        status.title,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                    Spacer(Modifier.padding(4.dp))
+                                    val pct = status.percent
+                                    if (pct == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    else LinearProgressIndicator(
+                                        progress = { pct / 100f },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    if (status.queued > 0) {
+                                        Text(
+                                            "${status.queued} more waiting in the queue",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
                             }
                             TextButton(onClick = {
                                 context.startService(

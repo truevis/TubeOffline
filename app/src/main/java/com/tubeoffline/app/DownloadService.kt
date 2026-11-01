@@ -30,6 +30,8 @@ data class DownloadStatus(
     val title: String = "",
     val percent: Int? = null,
     val queued: Int = 0,
+    /** YouTube id for the active download; drives the Downloading now thumbnail. */
+    val youTubeId: String? = null,
     /** Bumped every time a download finishes (success or failure) so the UI can refresh. */
     val finishedCount: Int = 0,
     val lastMessage: String? = null,
@@ -116,9 +118,12 @@ class DownloadService : Service() {
                     return
                 }
                 currentUrl = next
-                publish { it.copy(active = true, title = "Starting…", percent = null, queued = queue.size) }
+                val id = YouTubeUrl.videoId(next)
+                publish { it.copy(active = true, title = "Starting…", percent = null, queued = queue.size, youTubeId = id) }
                 next
             }
+            // Warm thumbnail cache off the queue lock (network).
+            YouTubeUrl.videoId(url)?.let { ThumbnailCache.ensureCached(this, it) }
             cancelRequested = false
             download(url)
         }
@@ -189,7 +194,7 @@ class DownloadService : Service() {
                 }
             }
         } finally {
-            publish { it.copy(active = false, percent = null, finishedCount = it.finishedCount + 1) }
+            publish { it.copy(active = false, percent = null, youTubeId = null, finishedCount = it.finishedCount + 1) }
         }
     }
 
