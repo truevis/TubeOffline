@@ -28,8 +28,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -197,8 +197,6 @@ private fun PlayerScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
     var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
-    var hasPreviousVideo by remember { mutableStateOf(false) }
-    var hasNextVideo by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val showTitleRow = !inPictureInPicture && (!isLandscape || controllerVisible)
@@ -335,22 +333,6 @@ private fun PlayerScreen(
     }
 
 
-    LaunchedEffect(playRequest?.uri) {
-        val uri = playRequest?.uri
-        if (uri == null) {
-            hasPreviousVideo = false
-            hasNextVideo = false
-            return@LaunchedEffect
-        }
-        val (prev, next) = withContext(Dispatchers.IO) {
-            val hasPrev = runCatching { VideoStore.previousBefore(context, uri) != null }.getOrDefault(false)
-            val hasNext = runCatching { VideoStore.nextAfter(context, uri) != null }.getOrDefault(false)
-            hasPrev to hasNext
-        }
-        hasPreviousVideo = prev
-        hasNextVideo = next
-    }
-
     val currentController by rememberUpdatedState(controller)
     val currentPlayerView by rememberUpdatedState(playerView)
 
@@ -381,9 +363,10 @@ private fun PlayerScreen(
                     setBackgroundColor(android.graphics.Color.BLACK)
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
                     useController = !inPictureInPicture
+                    // One transport row: previous, −10s, play/pause, +15s, next.
+                    setShowPreviousButton(true)
                     setShowRewindButton(true)
                     setShowFastForwardButton(true)
-                    setShowPreviousButton(true)
                     setShowNextButton(true)
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
@@ -462,26 +445,6 @@ private fun PlayerScreen(
                         }
                     }
                 }
-                IconButton(
-                    onClick = { controller?.seekToPrevious() },
-                    enabled = hasPreviousVideo,
-                ) {
-                    Icon(
-                        SkipPreviousIcon,
-                        contentDescription = "Previous video",
-                        tint = MaterialTheme.colorScheme.inverseOnSurface,
-                    )
-                }
-                IconButton(
-                    onClick = { controller?.seekToNext() },
-                    enabled = hasNextVideo,
-                ) {
-                    Icon(
-                        SkipNextIcon,
-                        contentDescription = "Next video",
-                        tint = MaterialTheme.colorScheme.inverseOnSurface,
-                    )
-                }
                 if (!isLandscape) {
                     IconButton(onClick = { confirmDelete = true }) {
                         Icon(
@@ -492,10 +455,10 @@ private fun PlayerScreen(
                     }
                 }
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "Dismiss")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
                 IconButton(onClick = onStop) {
-                    Icon(StopIcon, contentDescription = "Stop")
+                    Icon(StopIcon, contentDescription = "Stop playback")
                 }
             }
         }
@@ -585,46 +548,6 @@ private val StopIcon: ImageVector = ImageVector.Builder(
         lineTo(18f, 6f)
         lineTo(18f, 18f)
         lineTo(6f, 18f)
-        close()
-    }
-}.build()
-
-private val SkipPreviousIcon: ImageVector = ImageVector.Builder(
-    name = "SkipPrevious",
-    defaultWidth = 24.dp,
-    defaultHeight = 24.dp,
-    viewportWidth = 24f,
-    viewportHeight = 24f,
-).apply {
-    path(fill = SolidColor(Color.Black)) {
-        moveTo(6f, 6f)
-        lineTo(8f, 6f)
-        lineTo(8f, 18f)
-        lineTo(6f, 18f)
-        close()
-        moveTo(9.5f, 12f)
-        lineTo(18f, 6f)
-        lineTo(18f, 18f)
-        close()
-    }
-}.build()
-
-private val SkipNextIcon: ImageVector = ImageVector.Builder(
-    name = "SkipNext",
-    defaultWidth = 24.dp,
-    defaultHeight = 24.dp,
-    viewportWidth = 24f,
-    viewportHeight = 24f,
-).apply {
-    path(fill = SolidColor(Color.Black)) {
-        moveTo(6f, 6f)
-        lineTo(14.5f, 12f)
-        lineTo(6f, 18f)
-        close()
-        moveTo(16f, 6f)
-        lineTo(18f, 6f)
-        lineTo(18f, 18f)
-        lineTo(16f, 18f)
         close()
     }
 }.build()

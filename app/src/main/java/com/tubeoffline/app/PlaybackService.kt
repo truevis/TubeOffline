@@ -40,8 +40,8 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
                 /* handleAudioFocus= */ true,
             )
             .setWakeMode(C.WAKE_MODE_LOCAL)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(15_000)
+            .setSeekBackIncrementMs(SEEK_BACK_MS)
+            .setSeekForwardIncrementMs(SEEK_FORWARD_MS)
             .build()
         // Wrap so Media3 next/prev transport + notification buttons switch library videos.
         val player = LibraryNavigatingPlayer(this, exo)
@@ -156,6 +156,12 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
 
     companion object {
         private const val TAG = "PlaybackService"
+
+        /** Rewind button and headset/media seek-back. */
+        const val SEEK_BACK_MS = 10_000L
+
+        /** Fast-forward button and headset/media seek-forward. */
+        const val SEEK_FORWARD_MS = 15_000L
 
         private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
         val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
@@ -287,21 +293,48 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
 }
 
 /**
- * Exposes Media3 next/previous commands for the downloaded library so PlayerView
- * transport controls and the media notification can switch videos. No wrap at ends.
+ * Previous and next on the player and the media notification move to the adjacent
+ * downloaded video (no wrap). Rewind and fast-forward stay the player's seek
+ * increments (10s back, 15s forward). Buttons are disabled at the ends of the list.
  */
 @UnstableApi
 private class LibraryNavigatingPlayer(
     private val appContext: android.content.Context,
     player: ExoPlayer,
 ) : ForwardingPlayer(player) {
-    override fun getAvailableCommands(): Player.Commands =
-        super.getAvailableCommands().buildUpon()
-            .add(COMMAND_SEEK_TO_NEXT)
-            .add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-            .add(COMMAND_SEEK_TO_PREVIOUS)
-            .add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-            .build()
+    private var cachedMediaId: String? = null
+    private var cachedHasPrevious = false
+    private var cachedHasNext = false
+
+    override fun getAvailableCommands(): Player.Commands {
+        refreshAdjacent()
+        val builder = super.getAvailableCommands().buildUpon()
+        if (cachedHasNext) {
+            builder.add(COMMAND_SEEK_TO_NEXT).add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        } else {
+            builder.remove(COMMAND_SEEK_TO_NEXT).remove(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        }
+        if (cachedHasPrevious) {
+            builder.add(COMMAND_SEEK_TO_PREVIOUS).add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        } else {
+            builder.remove(COMMAND_SEEK_TO_PREVIOUS).remove(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        }
+        return builder.build()
+    }
+
+    private fun refreshAdjacent() {
+        val id = currentMediaItem?.mediaId
+        if (id == cachedMediaId) return
+        cachedMediaId = id
+        val uri = id?.let(Uri::parse)
+        if (uri == null) {
+            cachedHasPrevious = false
+            cachedHasNext = false
+            return
+        }
+        cachedHasPrevious = runCatching { VideoStore.previousBefore(appContext, uri) != null }.getOrDefault(false)
+        cachedHasNext = runCatching { VideoStore.nextAfter(appContext, uri) != null }.getOrDefault(false)
+    }
 
     override fun seekToNext() {
         PlaybackService.playAdjacent(appContext, this, +1)
@@ -312,7 +345,6 @@ private class LibraryNavigatingPlayer(
     }
 
     override fun seekToPrevious() {
-        // Always previous library video (rewind is the separate seek-back control).
         PlaybackService.playAdjacent(appContext, this, -1)
     }
 
