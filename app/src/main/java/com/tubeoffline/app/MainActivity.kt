@@ -18,6 +18,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -74,10 +78,40 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private val highlightUriState = mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        highlightUriState.value = highlightUriFrom(intent)
         enableEdgeToEdge()
-        setContent { AppTheme { MainScreen() } }
+        setContent {
+            AppTheme {
+                val highlightUri by highlightUriState
+                MainScreen(
+                    highlightUri = highlightUri,
+                    onHighlightConsumed = { highlightUriState.value = null },
+                )
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        highlightUriState.value = highlightUriFrom(intent)
+    }
+
+    companion object {
+        const val EXTRA_HIGHLIGHT_URI = "highlight_uri"
+
+        fun openLibraryIntent(context: android.content.Context, highlightUri: Uri? = null): Intent =
+            Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                highlightUri?.let { putExtra(EXTRA_HIGHLIGHT_URI, it.toString()) }
+            }
+
+        fun highlightUriFrom(intent: Intent?): Uri? =
+            intent?.getStringExtra(EXTRA_HIGHLIGHT_URI)?.let(Uri::parse)
     }
 }
 
@@ -95,11 +129,15 @@ internal fun AppTheme(content: @Composable () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScreen() {
+private fun MainScreen(
+    highlightUri: Uri? = null,
+    onHighlightConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val status by DownloadService.status.collectAsStateWithLifecycle()
     val nowPlaying by PlaybackService.nowPlaying.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
 
     var videos by remember { mutableStateOf<List<SavedVideo>>(emptyList()) }
     var completedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -109,12 +147,36 @@ private fun MainScreen() {
     var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
     var pasted by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
+    var pendingHighlightUri by remember { mutableStateOf<Uri?>(null) }
+    val activeHighlightUri = pendingHighlightUri ?: highlightUri
     var freeBytes by remember { mutableStateOf<Long?>(null) }
     var autoplay by remember { mutableStateOf(AppPreferences.isAutoplayEnabled(context)) }
 
     val filteredVideos = remember(videos, searchQuery) {
         val q = searchQuery.trim()
         if (q.isEmpty()) videos else videos.filter { it.name.contains(q, ignoreCase = true) }
+    }
+
+    // When opened from share (or duplicate paste), scroll the existing row into view briefly.
+    LaunchedEffect(activeHighlightUri, videos, filteredVideos, status.active, status.lastMessage, nowPlaying) {
+        val target = activeHighlightUri ?: return@LaunchedEffect
+        if (searchQuery.isNotBlank()) {
+            searchQuery = ""
+            return@LaunchedEffect // recompose with full list, then scroll
+        }
+        val indexInLib = filteredVideos.indexOfFirst { it.uri == target }
+        if (indexInLib < 0) return@LaunchedEffect
+        var headerCount = 2 // sponsor + paste
+        if (nowPlaying != null) headerCount++
+        if (status.active) headerCount++
+        else if (status.lastMessage != null) headerCount++
+        headerCount++ // library heading placeholder item
+        if (videos.isNotEmpty()) headerCount++ // search field
+        delay(50)
+        runCatching { listState.animateScrollToItem(headerCount + indexInLib) }
+        delay(2500)
+        if (pendingHighlightUri == target) pendingHighlightUri = null
+        if (highlightUri == target) onHighlightConsumed()
     }
 
     val refresh = { refreshKey++ }
@@ -201,6 +263,7 @@ private fun MainScreen() {
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -245,9 +308,22 @@ private fun MainScreen() {
                         if (url == null) {
                             Toast.makeText(context, "That doesn't look like a YouTube video link", Toast.LENGTH_SHORT).show()
                         } else {
-                            DownloadService.enqueue(context, url)
-                            pasted = ""
-                            Toast.makeText(context, "Added to the download queue", Toast.LENGTH_SHORT).show()
+                            when (val outcome = DownloadService.enqueue(context, url)) {
+                                is EnqueueOutcome.AlreadyDownloaded -> {
+                                    Toast.makeText(context, "Already downloaded", Toast.LENGTH_SHORT).show()
+                                    pasted = ""
+                                    searchQuery = ""
+                                    pendingHighlightUri = outcome.video.uri
+                                }
+                                EnqueueOutcome.AlreadyInFlight -> {
+                                    Toast.makeText(context, "Already downloading", Toast.LENGTH_SHORT).show()
+                                    pasted = ""
+                                }
+                                EnqueueOutcome.Queued -> {
+                                    pasted = ""
+                                    Toast.makeText(context, "Added to the download queue", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         }
                     }) { Text("Download") }
                 }
@@ -364,6 +440,7 @@ private fun MainScreen() {
                 VideoRow(
                     video = video,
                     played = video.uri.toString() in completedUris,
+                    highlighted = video.uri == activeHighlightUri,
                     onOpen = {
                         val title = video.name.substringBeforeLast('.')
                         context.startActivity(
@@ -432,11 +509,17 @@ private fun MainScreen() {
 private fun VideoRow(
     video: SavedVideo,
     played: Boolean,
+    highlighted: Boolean = false,
     onOpen: () -> Unit,
     onShare: (() -> Unit)?,
     onDelete: () -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
+    val highlightMod = if (highlighted) {
+        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+    } else {
+        Modifier
+    }
+    Card(modifier = Modifier.fillMaxWidth().then(highlightMod).clickable(onClick = onOpen)) {
         Row(
             Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,

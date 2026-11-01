@@ -159,6 +159,12 @@ object VideoStore {
         return result
     }
 
+    /** First library row with this YouTube id, or null. Match is by id only (not title). */
+    fun findByYouTubeId(context: Context, youTubeId: String): SavedVideo? {
+        val id = youTubeId.takeIf { it.isNotBlank() } ?: return null
+        return list(context).firstOrNull { it.youTubeId == id }
+    }
+
     /**
      * Next library row after [uri] (same order as the main list: newest first).
      * [skip] can omit already-watched items for autoplay; if every later row is

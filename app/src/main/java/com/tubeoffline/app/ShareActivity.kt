@@ -5,7 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 
-/** Receives "Share → TubeOffline" from YouTube / Chrome, queues the download and closes at once. */
+/** Receives share intents from YouTube / Chrome, queues the download and closes at once. */
 class ShareActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,8 +27,21 @@ class ShareActivity : Activity() {
             Toast.makeText(this, "TubeOffline: no YouTube link found in what you shared", Toast.LENGTH_LONG).show()
             return
         }
-        DownloadService.enqueue(this, url)
-        val extra = if (Notifications.canPost(this)) "" else "\n(Open TubeOffline once to allow notifications)"
-        Toast.makeText(this, "Added to the download queue.$extra", Toast.LENGTH_SHORT).show()
+        when (val outcome = DownloadService.enqueue(this, url)) {
+            is EnqueueOutcome.AlreadyDownloaded -> {
+                Toast.makeText(this, "Already downloaded", Toast.LENGTH_SHORT).show()
+                startActivity(MainActivity.openLibraryIntent(this, outcome.video.uri))
+            }
+            EnqueueOutcome.AlreadyInFlight -> {
+                Toast.makeText(this, "Already downloading", Toast.LENGTH_SHORT).show()
+                startActivity(MainActivity.openLibraryIntent(this))
+            }
+            EnqueueOutcome.Queued -> {
+                val extra =
+                    if (Notifications.canPost(this)) ""
+                    else "\n(Open TubeOffline once to allow notifications)"
+                Toast.makeText(this, "Added to the download queue.", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 }

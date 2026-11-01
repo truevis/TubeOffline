@@ -25,6 +25,12 @@ import org.json.JSONObject
 import java.io.File
 import java.util.ArrayDeque
 
+sealed interface EnqueueOutcome {
+    data object Queued : EnqueueOutcome
+    data class AlreadyDownloaded(val video: SavedVideo) : EnqueueOutcome
+    data object AlreadyInFlight : EnqueueOutcome
+}
+
 data class DownloadStatus(
     val active: Boolean = false,
     val title: String = "",
@@ -55,11 +61,42 @@ class DownloadService : Service() {
         private val _status = MutableStateFlow(DownloadStatus())
         val status: StateFlow<DownloadStatus> = _status.asStateFlow()
 
-        fun enqueue(context: Context, url: String) {
+        private val flightLock = Any()
+        /** YouTube ids accepted into the queue or currently downloading. */
+        private val inFlightIds = mutableSetOf<String>()
+
+        /**
+         * Queues [url] unless that YouTube id is already saved or already downloading/queued.
+         * Callers should toast based on the returned [EnqueueOutcome].
+         */
+        fun enqueue(context: Context, url: String): EnqueueOutcome {
+            val app = context.applicationContext
+            val id = YouTubeUrl.videoId(url)
+            if (id != null) {
+                VideoStore.findByYouTubeId(app, id)?.let {
+                    return EnqueueOutcome.AlreadyDownloaded(it)
+                }
+                synchronized(flightLock) {
+                    if (id in inFlightIds || _status.value.youTubeId == id) {
+                        return EnqueueOutcome.AlreadyInFlight
+                    }
+                    inFlightIds.add(id)
+                }
+            }
             ContextCompat.startForegroundService(
-                context,
-                Intent(context, DownloadService::class.java).setAction(ACTION_DOWNLOAD).putExtra(EXTRA_URL, url),
+                app,
+                Intent(app, DownloadService::class.java).setAction(ACTION_DOWNLOAD).putExtra(EXTRA_URL, url),
             )
+            return EnqueueOutcome.Queued
+        }
+
+        internal fun releaseInFlight(youTubeId: String?) {
+            val id = youTubeId?.takeIf { it.isNotBlank() } ?: return
+            synchronized(flightLock) { inFlightIds.remove(id) }
+        }
+
+        internal fun clearInFlight() {
+            synchronized(flightLock) { inFlightIds.clear() }
         }
     }
 
@@ -88,6 +125,7 @@ class DownloadService : Service() {
             ACTION_CANCEL -> {
                 // Cancel the current download and everything queued behind it.
                 cancelRequested = true
+                clearInFlight()
                 synchronized(lock) {
                     queue.clear()
                     currentProcessId?.let { YoutubeDL.getInstance().destroyProcessById(it) }
@@ -97,7 +135,9 @@ class DownloadService : Service() {
             ACTION_DOWNLOAD -> {
                 val url = intent.getStringExtra(EXTRA_URL)
                 synchronized(lock) {
-                    if (url != null && url != currentUrl && url !in queue) queue.addLast(url)
+                    if (url != null && !isDuplicateUrlLocked(url)) {
+                        queue.addLast(url)
+                    }
                     publish { it.copy(queued = queue.size) }
                     if (worker == null) worker = scope.launch { runQueue() }
                 }
@@ -105,6 +145,15 @@ class DownloadService : Service() {
             else -> synchronized(lock) { if (worker == null) stopNow() }
         }
         return START_NOT_STICKY
+    }
+
+    /** Caller must hold [lock]. Same YouTube id as current or queued counts as duplicate. */
+    private fun isDuplicateUrlLocked(url: String): Boolean {
+        if (url == currentUrl || url in queue) return true
+        val id = YouTubeUrl.videoId(url) ?: return false
+        val currentId = currentUrl?.let { YouTubeUrl.videoId(it) }
+        if (id == currentId) return true
+        return queue.any { YouTubeUrl.videoId(it) == id }
     }
 
     private fun runQueue() {
@@ -194,7 +243,9 @@ class DownloadService : Service() {
                 }
             }
         } finally {
+            val finishedId = YouTubeUrl.videoId(url)
             publish { it.copy(active = false, percent = null, youTubeId = null, finishedCount = it.finishedCount + 1) }
+            releaseInFlight(finishedId)
         }
     }
 
