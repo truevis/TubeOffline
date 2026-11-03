@@ -6,6 +6,8 @@ Personal Android app that downloads a YouTube video for offline playback. Share 
 
 Repository: https://github.com/truevis/TubeOffline
 
+<p align="center"><img src="docs/screenshot.png" alt="TubeOffline main screen: paste box, search, and downloaded videos with thumbnails" width="360"></p>
+
 ## Why TubeOffline
 
 - **Planes and dead zones.** Download before you fly or commute; watch without Wi-Fi or cell service.
