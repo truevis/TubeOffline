@@ -77,6 +77,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import sh.calvin.reorderable.ReorderableCollectionItemScope
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
+
 class MainActivity : ComponentActivity() {
     private val highlightUriState = mutableStateOf<Uri?>(null)
 
@@ -147,6 +156,26 @@ private fun MainScreen(
     var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
     var pasted by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
+    val haptic = LocalHapticFeedback.current
+    val videosLatest = rememberUpdatedState(videos)
+    val searchQueryLatest = rememberUpdatedState(searchQuery)
+    val canReorder = searchQuery.isBlank()
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        if (searchQueryLatest.value.isNotBlank()) return@rememberReorderableLazyListState
+        val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
+        val toKey = to.key as? String ?: return@rememberReorderableLazyListState
+        val mutable = videosLatest.value.toMutableList()
+        val fromIndex = mutable.indexOfFirst { it.uri.toString() == fromKey }
+        val toIndex = mutable.indexOfFirst { it.uri.toString() == toKey }
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) {
+            return@rememberReorderableLazyListState
+        }
+        val item = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, item)
+        videos = mutable
+        LibraryOrderStore.saveOrder(context, mutable.map { it.uri })
+        haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+    }
     var pendingHighlightUri by remember { mutableStateOf<Uri?>(null) }
     val activeHighlightUri = pendingHighlightUri ?: highlightUri
     var freeBytes by remember { mutableStateOf<Long?>(null) }
@@ -183,6 +212,7 @@ private fun MainScreen(
 
     fun cleanupDeleted(uri: Uri, youTubeId: String?) {
         PlaybackPositionStore.clear(context, uri)
+        LibraryOrderStore.remove(context, uri)
         ThumbnailCache.delete(context, youTubeId)
     }
 
@@ -437,26 +467,53 @@ private fun MainScreen(
             }
 
             items(filteredVideos, key = { it.uri.toString() }) { video ->
-                VideoRow(
-                    video = video,
-                    played = video.uri.toString() in completedUris,
-                    highlighted = video.uri == activeHighlightUri,
-                    onOpen = {
-                        val title = video.name.substringBeforeLast('.')
-                        context.startActivity(
-                            PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
+                if (canReorder) {
+                    ReorderableItem(reorderableState, key = video.uri.toString()) { isDragging ->
+                        VideoRow(
+                            video = video,
+                            played = video.uri.toString() in completedUris,
+                            highlighted = video.uri == activeHighlightUri,
+                            dragging = isDragging,
+                            reorderScope = this,
+                            onOpen = {
+                                val title = video.name.substringBeforeLast('.')
+                                context.startActivity(
+                                    PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
+                                )
+                            },
+                            onShare = video.youTubeId?.let { id ->
+                                {
+                                    val send = Intent(Intent.ACTION_SEND)
+                                        .setType("text/plain")
+                                        .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
+                                    context.startActivity(Intent.createChooser(send, null))
+                                }
+                            },
+                            onDelete = { toDelete = video },
                         )
-                    },
-                    onShare = video.youTubeId?.let { id ->
-                        {
-                            val send = Intent(Intent.ACTION_SEND)
-                                .setType("text/plain")
-                                .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
-                            context.startActivity(Intent.createChooser(send, null))
-                        }
-                    },
-                    onDelete = { toDelete = video },
-                )
+                    }
+                } else {
+                    VideoRow(
+                        video = video,
+                        played = video.uri.toString() in completedUris,
+                        highlighted = video.uri == activeHighlightUri,
+                        onOpen = {
+                            val title = video.name.substringBeforeLast('.')
+                            context.startActivity(
+                                PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
+                            )
+                        },
+                        onShare = video.youTubeId?.let { id ->
+                            {
+                                val send = Intent(Intent.ACTION_SEND)
+                                    .setType("text/plain")
+                                    .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
+                                context.startActivity(Intent.createChooser(send, null))
+                            }
+                        },
+                        onDelete = { toDelete = video },
+                    )
+                }
             }
         }
     }
@@ -510,6 +567,8 @@ private fun VideoRow(
     video: SavedVideo,
     played: Boolean,
     highlighted: Boolean = false,
+    dragging: Boolean = false,
+    reorderScope: ReorderableCollectionItemScope? = null,
     onOpen: () -> Unit,
     onShare: (() -> Unit)?,
     onDelete: () -> Unit,
@@ -519,11 +578,26 @@ private fun VideoRow(
     } else {
         Modifier
     }
-    Card(modifier = Modifier.fillMaxWidth().then(highlightMod).clickable(onClick = onOpen)) {
+    val elevation by animateDpAsState(if (dragging) 6.dp else 0.dp, label = "reorderElevation")
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(highlightMod)
+            .clickable(onClick = onOpen),
+        elevation = androidx.compose.material3.CardDefaults.cardElevation(defaultElevation = elevation),
+    ) {
         Row(
-            Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            Modifier.padding(start = 4.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (reorderScope != null) {
+                IconButton(
+                    modifier = with(reorderScope) { Modifier.draggableHandle() },
+                    onClick = {},
+                ) {
+                    Icon(Icons.Filled.Menu, contentDescription = "Reorder")
+                }
+            }
             YouTubeThumbnail(video.youTubeId)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

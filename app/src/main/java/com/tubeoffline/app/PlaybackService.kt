@@ -323,8 +323,9 @@ private class LibraryNavigatingPlayer(
     }
 
     private fun refreshAdjacent() {
+        // Always re-query so a library drag-reorder while this video plays updates
+        // the enabled state of previous/next on the next command refresh.
         val id = currentMediaItem?.mediaId
-        if (id == cachedMediaId) return
         cachedMediaId = id
         val uri = id?.let(Uri::parse)
         if (uri == null) {

@@ -156,7 +156,7 @@ object VideoStore {
                 )
             }
         }
-        return result
+        return LibraryOrderStore.apply(result, LibraryOrderStore.getOrder(context))
     }
 
     /** First library row with this YouTube id, or null. Match is by id only (not title). */
@@ -166,7 +166,7 @@ object VideoStore {
     }
 
     /**
-     * Next library row after [uri] (same order as the main list: newest first).
+     * Next library row after [uri] (same order as the main list: custom drag order when set, otherwise newest first).
      * [skip] can omit already-watched items for autoplay; if every later row is
      * skipped, returns null so playback stops instead of looping.
      */
@@ -182,7 +182,7 @@ object VideoStore {
     }
 
     /**
-     * Previous library row before [uri] (same order as the main list: newest first).
+     * Previous library row before [uri] (same order as the main list: custom drag order when set, otherwise newest first).
      * Does not wrap: returns null when [uri] is first or missing. [skip] mirrors
      * [nextAfter] for symmetry; manual prev/next leave it at the default.
      */
