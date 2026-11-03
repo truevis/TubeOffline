@@ -89,8 +89,8 @@ For an x86_64 emulator, add `"x86_64"` to `abiFilters` in `app/build.gradle.kts`
 
 ## License
 
-TubeOffline is released under the [MIT License](LICENSE).
+TubeOffline is released under the [GNU General Public License v3.0 or later](LICENSE) (GPL-3.0-or-later). Copyright (c) 2026 Eric B.
+
+It is GPL because it bundles [youtubedl-android](https://github.com/yausername/youtubedl-android) (GPL-3.0). yt-dlp is Unlicense; that license applies to yt-dlp itself.
 
 This project is intended for personal use. You are responsible for complying with [YouTube's Terms of Service](https://www.youtube.com/t/terms) and with the copyright of each video's uploader. Downloading does not grant you rights beyond what those terms and the law allow.
-
-youtubedl-android is GPL-3.0. yt-dlp is Unlicense. Those licenses apply to those components; see their projects for details.
