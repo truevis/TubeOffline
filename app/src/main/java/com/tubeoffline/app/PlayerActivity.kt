@@ -19,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -397,76 +399,31 @@ private fun PlayerScreen(
             tonalElevation = 3.dp,
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val title = playRequest?.title ?: "Now playing"
+                // Actions on the left so they stay clear of system nav (especially landscape).
+                PlayerTitleBarActions(
+                    compact = isLandscape,
+                    playbackSpeed = playbackSpeed,
+                    speedMenuOpen = speedMenuOpen,
+                    onSpeedMenuOpenChange = { speedMenuOpen = it },
+                    onSpeedSelected = { speed ->
+                        controller?.setPlaybackSpeed(speed)
+                        playbackSpeed = speed
+                    },
+                    onDelete = { confirmDelete = true },
+                    onDismiss = onDismiss,
+                    onStop = onStop,
+                )
                 Text(
-                    text = playRequest?.title ?: "Now playing",
-                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                    text = title,
+                    modifier = Modifier.weight(1f).padding(start = 4.dp, end = 8.dp),
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Box {
-                    TextButton(
-                        onClick = { speedMenuOpen = true },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
-                        ),
-                    ) {
-                        Text(
-                            formatPlaybackSpeed(playbackSpeed),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.inverseOnSurface,
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = speedMenuOpen,
-                        onDismissRequest = { speedMenuOpen = false },
-                    ) {
-                        PlaybackSpeeds.forEach { speed ->
-                            val selected = abs(playbackSpeed - speed) < 0.01f
-                            DropdownMenuItem(
-                                text = { Text(formatPlaybackSpeed(speed)) },
-                                leadingIcon = {
-                                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                                        if (selected) {
-                                            Icon(Icons.Filled.Check, contentDescription = "Current speed")
-                                        }
-                                    }
-                                },
-                                onClick = {
-                                    controller?.setPlaybackSpeed(speed)
-                                    playbackSpeed = speed
-                                    speedMenuOpen = false
-                                },
-                            )
-                        }
-                    }
-                }
-                // Compact hit targets in landscape so title + speed + delete + back + stop fit.
-                val chromeIconMod = if (isLandscape) {
-                    Modifier.size(40.dp)
-                } else {
-                    Modifier
-                }
-                IconButton(
-                    onClick = { confirmDelete = true },
-                    modifier = chromeIconMod,
-                ) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = "Delete video",
-                        tint = MaterialTheme.colorScheme.inverseOnSurface,
-                    )
-                }
-                IconButton(onClick = onDismiss, modifier = chromeIconMod) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                }
-                IconButton(onClick = onStop, modifier = chromeIconMod) {
-                    Icon(StopIcon, contentDescription = "Stop playback")
-                }
             }
         }
 
@@ -527,6 +484,76 @@ private fun PlayerScreen(
                     TextButton(onClick = { confirmDelete = false }) { Text("Keep") }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun PlayerTitleBarActions(
+    compact: Boolean,
+    playbackSpeed: Float,
+    speedMenuOpen: Boolean,
+    onSpeedMenuOpenChange: (Boolean) -> Unit,
+    onSpeedSelected: (Float) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val iconHit = if (compact) 40.dp else 44.dp
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+    ) {
+        Box {
+            TextButton(
+                onClick = { onSpeedMenuOpenChange(true) },
+                modifier = Modifier.sizeIn(maxHeight = iconHit),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+                ),
+            ) {
+                Text(
+                    formatPlaybackSpeed(playbackSpeed),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                )
+            }
+            DropdownMenu(
+                expanded = speedMenuOpen,
+                onDismissRequest = { onSpeedMenuOpenChange(false) },
+            ) {
+                PlaybackSpeeds.forEach { speed ->
+                    val selected = abs(playbackSpeed - speed) < 0.01f
+                    DropdownMenuItem(
+                        text = { Text(formatPlaybackSpeed(speed)) },
+                        leadingIcon = {
+                            Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                if (selected) {
+                                    Icon(Icons.Filled.Check, contentDescription = "Current speed")
+                                }
+                            }
+                        },
+                        onClick = {
+                            onSpeedSelected(speed)
+                            onSpeedMenuOpenChange(false)
+                        },
+                    )
+                }
+            }
+        }
+        IconButton(onClick = onDelete, modifier = Modifier.size(iconHit)) {
+            Icon(
+                Icons.Filled.Delete,
+                contentDescription = "Delete video",
+                tint = MaterialTheme.colorScheme.inverseOnSurface,
+            )
+        }
+        IconButton(onClick = onDismiss, modifier = Modifier.size(iconHit)) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        }
+        IconButton(onClick = onStop, modifier = Modifier.size(iconHit)) {
+            Icon(StopIcon, contentDescription = "Stop playback")
         }
     }
 }
