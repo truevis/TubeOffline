@@ -1,20 +1,29 @@
 # TubeOffline
 
-Personal Android app that downloads a YouTube video for offline playback. Share a link (or paste one) and it saves the smallest file that still has picture and sound to `Movies/TubeOffline`.
+**Watch YouTube offline** -- on a plane, underground, or anywhere without signal. Download ahead of time on Wi-Fi so you are not burning mobile data later. Files stay small: the app picks the lowest-quality stream that still has picture and sound (often around 144p).
 
-It is meant to be built from source and sideloaded with `adb`. It is not on the Play Store. The debug build targets **arm64** phones (developed on a Pixel 8). Minimum SDK is 29 (Android 10).
+Personal Android app that downloads a YouTube video for offline playback. Share a link (or paste one) and it saves an MP4 to `Movies/TubeOffline`. Built from source and sideloaded with `adb` (not on the Play Store). Debug builds target **arm64** phones (developed on a Pixel 8). Minimum SDK is 29 (Android 10).
 
 Repository: https://github.com/truevis/TubeOffline
+
+## Why TubeOffline
+
+- **Planes and dead zones.** Download before you fly or commute; watch without Wi-Fi or cell service.
+- **Save mobile data.** Grab videos on Wi-Fi, then play them later without streaming.
+- **Small downloads.** Lowest practical quality keeps storage light so you can pack more videos.
+- Share from YouTube or Chrome into **Download offline**, browse a library with offline thumbnails, play in the in-app player (resume, speed, autoplay, prev/next), and skip duplicates you already saved.
+
+This app is for personal use. Respect YouTube's terms of service and the copyright of whoever uploaded each video.
 
 ## Features
 
 - Share-sheet target **Download offline** for plain text, plus a paste box on the main screen. Accepts `youtube.com/watch`, `m.youtube.com`, `youtu.be`, `/shorts/`, `/live/`, and `/embed/` links, including a title pasted in front of the URL. Playlist parameters are ignored; only that one video is downloaded.
-- Downloads run in a foreground service with a progress notification and a Cancel action. Shares are queued and run one at a time.
+- Downloads run in a foreground service with a progress notification and a Cancel action. Shares are queued and run one at a time. Identical YouTube ids already in the library are skipped.
 - Format: smallest video that still has audio, preferring an English audio track when YouTube labels a language, merged to MP4 with ffmpeg (see `Engine.FORMAT_LOWEST`). In practice that is often 144p.
 - Files go to `Movies/TubeOffline/<title>.mp4` through MediaStore, so other apps can see them. The YouTube id is stored with the file for the thumbnail and the original link.
 - If the bundled yt-dlp is missing or older than about 60 days, the download service updates it from GitHub before starting.
-- Library: free space, search, thumbnail, title (dimmed after you finish a video), relative upload age when it was recorded, share of the original `watch?v=` link, and delete. Delete removes the file; it is not sent to trash. Videos saved before upload time was recorded have no age label.
-- Player (Media3): resume, and one transport row — previous video, rewind 10 seconds, play/pause, fast-forward 15 seconds, next video. Previous and next follow the library list (newest first) and are disabled at the ends. Playback speed is 0.5× to 3×. Picture-in-picture starts when you leave while it is playing, and audio continues in the background. **Back** leaves playback running; **Stop** ends it. A **Now playing** card returns you to the current video. The media notification uses the same previous, play, and next actions.
+- Library: free space, search, thumbnail (cached for offline), title (dimmed after you finish a video), relative upload age when it was recorded, share of the original `watch?v=` link, and delete. Delete removes the file; it is not sent to trash. Videos saved before upload time was recorded have no age label. The **Downloading now** card shows a thumbnail while a job runs.
+- Player (Media3): resume, and one transport row -- previous video, rewind 10 seconds, play/pause, fast-forward 15 seconds, next video. Previous and next follow the library list (newest first) and are disabled at the ends. Playback speed is 0.5x to 3x. Picture-in-picture starts when you leave while it is playing, and audio continues in the background. **Back** leaves playback running; **Stop** ends it. Landscape top chrome includes delete (with confirm). A **Now playing** card returns you to the current video. The media notification uses the same previous, play, and next actions.
 - **Autoplay** is off until you turn it on. When on, the next library item plays after the current one ends, skipping videos already marked finished (manual prev/next always plays the adjacent file, even if you already finished it).
 
 ## Build
@@ -50,7 +59,7 @@ USB debugging on, one authorized phone connected:
 .\install.ps1 -SkipBuild  # reinstall the last APK
 ```
 
-`install.bat` does the same. The script looks for the SDK via `ANDROID_HOME` or `%LOCALAPPDATA%\Android\Sdk`, writes `local.properties` if needed, and uses Android Studio’s JDK when `java` is not on `PATH`.
+`install.bat` does the same. The script looks for the SDK via `ANDROID_HOME` or `%LOCALAPPDATA%\Android\Sdk`, writes `local.properties` if needed, and uses Android Studio's JDK when `java` is not on `PATH`.
 
 Manual install:
 
@@ -66,7 +75,7 @@ For an x86_64 emulator, add `"x86_64"` to `abiFilters` in `app/build.gradle.kts`
 ## Use
 
 1. Open TubeOffline once and allow notifications (and video access so it can list files from an earlier install).
-2. In YouTube or Chrome: Share → **Download offline**. The first time it may be under More. Or paste a link on the main screen.
+2. In YouTube or Chrome: Share -> **Download offline**. The first time it may be under More. Or paste a link on the main screen.
 3. When the notification finishes, tap it or open the library. The first download after install is slower while Python and ffmpeg unpack.
 
 ## Limitations
@@ -75,13 +84,13 @@ For an x86_64 emulator, add `"x86_64"` to `abiFilters` in `app/build.gradle.kts`
 - YouTube breaks downloaders often. The app refreshes yt-dlp when its copy is older than about 60 days. There is no cookie or sign-in support, so network-level bot checks can still block a download.
 - No age-restricted, private, members-only, or DRM video. Live URLs are not handled in a useful way. Playlists download only the single shared video.
 - One download at a time. Cancel stops the current item and the rest of the queue.
-- Android’s limit on `dataSync` foreground services can cut off a very long queue.
+- Android's limit on `dataSync` foreground services can cut off a very long queue.
 - arm64-v8a only, unless you change `abiFilters`.
-
-YouTube’s terms and the uploader’s rights still apply.
 
 ## License
 
-TubeOffline is released under the [WTFPL](LICENSE) (Do What The Fuck You Want To Public License).
+TubeOffline is released under the [MIT License](LICENSE).
 
-youtubedl-android is GPL-3.0. yt-dlp is Unlicense. Those licenses apply to those components, not as a license for this app.
+This project is intended for personal use. You are responsible for complying with [YouTube's Terms of Service](https://www.youtube.com/t/terms) and with the copyright of each video's uploader. Downloading does not grant you rights beyond what those terms and the law allow.
+
+youtubedl-android is GPL-3.0. yt-dlp is Unlicense. Those licenses apply to those components; see their projects for details.
