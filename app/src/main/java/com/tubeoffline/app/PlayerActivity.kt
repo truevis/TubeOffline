@@ -445,19 +445,26 @@ private fun PlayerScreen(
                         }
                     }
                 }
-                if (!isLandscape) {
-                    IconButton(onClick = { confirmDelete = true }) {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = "Delete video",
-                            tint = MaterialTheme.colorScheme.inverseOnSurface,
-                        )
-                    }
+                // Compact hit targets in landscape so title + speed + delete + back + stop fit.
+                val chromeIconMod = if (isLandscape) {
+                    Modifier.size(40.dp)
+                } else {
+                    Modifier
                 }
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = { confirmDelete = true },
+                    modifier = chromeIconMod,
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "Delete video",
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = chromeIconMod) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                 }
-                IconButton(onClick = onStop) {
+                IconButton(onClick = onStop, modifier = chromeIconMod) {
                     Icon(StopIcon, contentDescription = "Stop playback")
                 }
             }
