@@ -197,6 +197,48 @@ object VideoStore {
         return videos.asSequence().take(index).toList().asReversed().firstOrNull { !skip(it) }
     }
 
+    sealed interface TrashResult {
+        /** File marked IS_TRASHED in MediaStore (API 30+). Hidden from [list]. */
+        data object Trashed : TrashResult
+        /** MediaStore trash unavailable; caller should hide optimistically and permanently delete later. */
+        data object Unsupported : TrashResult
+        data class Failed(val message: String) : TrashResult
+    }
+
+    /**
+     * Soft-delete for swipe-to-trash. On API 30+, sets [MediaStore.MediaColumns.IS_TRASHED]
+     * so the row disappears from default queries (library, autoplay, prev/next) but can be
+     * restored with [untrash]. Falls back to [TrashResult.Unsupported] on older APIs or when
+     * the update is denied (caller then defers a permanent [delete]).
+     */
+    fun trash(context: Context, uri: Uri): TrashResult {
+        if (Build.VERSION.SDK_INT < 30) return TrashResult.Unsupported
+        return try {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_TRASHED, 1)
+            }
+            val updated = context.contentResolver.update(uri, values, null, null)
+            if (updated > 0) TrashResult.Trashed else TrashResult.Unsupported
+        } catch (e: SecurityException) {
+            TrashResult.Unsupported
+        } catch (e: Exception) {
+            TrashResult.Failed(e.message ?: "Trash failed")
+        }
+    }
+
+    /** Restores a row previously soft-deleted with [trash]. Returns false if restore failed. */
+    fun untrash(context: Context, uri: Uri): Boolean {
+        if (Build.VERSION.SDK_INT < 30) return false
+        return try {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_TRASHED, 0)
+            }
+            context.contentResolver.update(uri, values, null, null) > 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     sealed interface DeleteResult {
         data object Deleted : DeleteResult
         /** File belongs to an older install: the user has to confirm via this system dialog. */

@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,10 +49,17 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -124,6 +133,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Swipe-to-trash awaiting Snackbar Undo (or activity stop). */
+private data class PendingSwipeTrash(
+    val video: SavedVideo,
+    val insertIndex: Int,
+    /** True when MediaStore IS_TRASHED was set; false means permanent delete is still pending. */
+    val mediaStoreTrashed: Boolean,
+)
+
 @Composable
 internal fun AppTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
@@ -154,6 +171,10 @@ private fun MainScreen(
     var toDelete by remember { mutableStateOf<SavedVideo?>(null) }
     var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
     var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
+    var pendingSwipeTrash by remember {
+        mutableStateOf<Map<String, PendingSwipeTrash>>(emptyMap())
+    }
+    val snackbarHostState = remember { SnackbarHostState() }
     var pasted by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     val haptic = LocalHapticFeedback.current
@@ -233,6 +254,126 @@ private fun MainScreen(
         refresh()
     }
 
+    fun restoreSwipeRow(pending: PendingSwipeTrash) {
+        val key = pending.video.uri.toString()
+        val mutable = videos.toMutableList()
+        if (mutable.none { it.uri.toString() == key }) {
+            val index = pending.insertIndex.coerceIn(0, mutable.size)
+            mutable.add(index, pending.video)
+            videos = mutable
+        }
+        if (PlaybackPositionStore.isCompleted(context, pending.video.uri)) {
+            completedUris = completedUris + key
+        }
+    }
+
+    fun commitSwipeTrash(key: String) {
+        val pending = pendingSwipeTrash[key] ?: return
+        pendingSwipeTrash = pendingSwipeTrash - key
+        scope.launch {
+            PlaybackService.stopIfPlaying(pending.video.uri)
+            if (pending.mediaStoreTrashed) {
+                cleanupDeleted(pending.video.uri, pending.video.youTubeId)
+            } else {
+                val result = withContext(Dispatchers.IO) {
+                    VideoStore.delete(context, pending.video.uri)
+                }
+                when (result) {
+                    VideoStore.DeleteResult.Deleted -> {
+                        cleanupDeleted(pending.video.uri, pending.video.youTubeId)
+                    }
+                    is VideoStore.DeleteResult.NeedsConfirmation -> {
+                        // Swipe path must not prompt; leave the optimistic hide and ask via
+                        // the existing delete-confirm launcher as a last resort.
+                        pendingDeleteUri = pending.video.uri
+                        pendingDeleteYouTubeId = pending.video.youTubeId
+                        deleteLauncher.launch(
+                            IntentSenderRequest.Builder(result.intentSender).build(),
+                        )
+                    }
+                    is VideoStore.DeleteResult.Failed -> {
+                        Toast.makeText(
+                            context,
+                            "Couldn't delete: ${result.message}",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        restoreSwipeRow(pending)
+                    }
+                }
+            }
+            refresh()
+        }
+    }
+
+    fun undoSwipeTrash(key: String) {
+        val pending = pendingSwipeTrash[key] ?: return
+        pendingSwipeTrash = pendingSwipeTrash - key
+        scope.launch {
+            if (pending.mediaStoreTrashed) {
+                val ok = withContext(Dispatchers.IO) {
+                    VideoStore.untrash(context, pending.video.uri)
+                }
+                if (!ok) {
+                    Toast.makeText(context, "Couldn't restore from trash", Toast.LENGTH_SHORT).show()
+                    // Keep it out of the list; treat as committed soft-trash.
+                    cleanupDeleted(pending.video.uri, pending.video.youTubeId)
+                    refresh()
+                    return@launch
+                }
+            }
+            restoreSwipeRow(pending)
+            refresh()
+        }
+    }
+
+    fun swipeTrash(video: SavedVideo) {
+        val key = video.uri.toString()
+        if (key in pendingSwipeTrash) return
+        val index = videos.indexOfFirst { it.uri.toString() == key }
+        if (index < 0) return
+        videos = videos.filter { it.uri.toString() != key }
+        completedUris = completedUris - key
+        PlaybackService.stopIfPlaying(video.uri)
+        scope.launch {
+            val trashResult = withContext(Dispatchers.IO) {
+                VideoStore.trash(context, video.uri)
+            }
+            when (trashResult) {
+                is VideoStore.TrashResult.Failed -> {
+                    val mutable = videos.toMutableList()
+                    mutable.add(index.coerceIn(0, mutable.size), video)
+                    videos = mutable
+                    Toast.makeText(
+                        context,
+                        "Couldn't move to trash: ${trashResult.message}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@launch
+                }
+                VideoStore.TrashResult.Trashed -> {
+                    pendingSwipeTrash = pendingSwipeTrash + (
+                        key to PendingSwipeTrash(video, index, mediaStoreTrashed = true)
+                    )
+                }
+                VideoStore.TrashResult.Unsupported -> {
+                    pendingSwipeTrash = pendingSwipeTrash + (
+                        key to PendingSwipeTrash(video, index, mediaStoreTrashed = false)
+                    )
+                }
+            }
+            val result = snackbarHostState.showSnackbar(
+                message = "Moved to trash",
+                actionLabel = "Undo",
+                duration = SnackbarDuration.Short,
+                withDismissAction = true,
+            )
+            when (result) {
+                SnackbarResult.ActionPerformed -> undoSwipeTrash(key)
+                SnackbarResult.Dismissed -> commitSwipeTrash(key)
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         val perms = buildList {
             if (Build.VERSION.SDK_INT >= 33) {
@@ -248,11 +389,19 @@ private fun MainScreen(
         autoplay = AppPreferences.isAutoplayEnabled(context)
         refresh()
     }
+    // Finalize any swipe-trash still awaiting Undo when leaving the screen.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        val keys = pendingSwipeTrash.keys.toList()
+        for (key in keys) commitSwipeTrash(key)
+    }
     LaunchedEffect(refreshKey, status.finishedCount) {
         val listed = withContext(Dispatchers.IO) {
             try { VideoStore.list(context) } catch (_: Exception) { emptyList() }
         }
-        videos = listed
+        val hideKeys = pendingSwipeTrash
+            .filterValues { !it.mediaStoreTrashed }
+            .keys
+        videos = listed.filter { it.uri.toString() !in hideKeys }
         completedUris = listed
             .filter { PlaybackPositionStore.isCompleted(context, it.uri) }
             .map { it.uri.toString() }
@@ -267,6 +416,7 @@ private fun MainScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("TubeOffline") },
@@ -467,52 +617,47 @@ private fun MainScreen(
             }
 
             items(filteredVideos, key = { it.uri.toString() }) { video ->
+                val openVideo = {
+                    val title = video.name.substringBeforeLast('.')
+                    context.startActivity(
+                        PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
+                    )
+                }
+                val shareVideo = video.youTubeId?.let { id ->
+                    {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
+                        context.startActivity(Intent.createChooser(send, null))
+                    }
+                }
                 if (canReorder) {
                     ReorderableItem(reorderableState, key = video.uri.toString()) { isDragging ->
+                        val itemScope = this
+                        SwipeTrashRow(onSwiped = { swipeTrash(video) }) {
+                            VideoRow(
+                                video = video,
+                                played = video.uri.toString() in completedUris,
+                                highlighted = video.uri == activeHighlightUri,
+                                dragging = isDragging,
+                                reorderScope = itemScope,
+                                onOpen = openVideo,
+                                onShare = shareVideo,
+                                onDelete = { toDelete = video },
+                            )
+                        }
+                    }
+                } else {
+                    SwipeTrashRow(onSwiped = { swipeTrash(video) }) {
                         VideoRow(
                             video = video,
                             played = video.uri.toString() in completedUris,
                             highlighted = video.uri == activeHighlightUri,
-                            dragging = isDragging,
-                            reorderScope = this,
-                            onOpen = {
-                                val title = video.name.substringBeforeLast('.')
-                                context.startActivity(
-                                    PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
-                                )
-                            },
-                            onShare = video.youTubeId?.let { id ->
-                                {
-                                    val send = Intent(Intent.ACTION_SEND)
-                                        .setType("text/plain")
-                                        .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
-                                    context.startActivity(Intent.createChooser(send, null))
-                                }
-                            },
+                            onOpen = openVideo,
+                            onShare = shareVideo,
                             onDelete = { toDelete = video },
                         )
                     }
-                } else {
-                    VideoRow(
-                        video = video,
-                        played = video.uri.toString() in completedUris,
-                        highlighted = video.uri == activeHighlightUri,
-                        onOpen = {
-                            val title = video.name.substringBeforeLast('.')
-                            context.startActivity(
-                                PlayerActivity.playIntent(context, video.uri, title, playImmediately = true),
-                            )
-                        },
-                        onShare = video.youTubeId?.let { id ->
-                            {
-                                val send = Intent(Intent.ACTION_SEND)
-                                    .setType("text/plain")
-                                    .putExtra(Intent.EXTRA_TEXT, "https://www.youtube.com/watch?v=$id")
-                                context.startActivity(Intent.createChooser(send, null))
-                            }
-                        },
-                        onDelete = { toDelete = video },
-                    )
                 }
             }
         }
@@ -559,6 +704,46 @@ private fun MainScreen(
             },
             dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Keep") } },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeTrashRow(
+    onSwiped: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.StartToEnd) {
+                onSwiped()
+                true
+            } else {
+                false
+            }
+        },
+    )
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = false,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.error)
+                    .padding(horizontal = 24.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.onError,
+                )
+            }
+        },
+    ) {
+        content()
     }
 }
 
