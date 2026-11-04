@@ -76,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextDecoration
@@ -745,6 +746,7 @@ private fun SwipeTrashRow(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .clip(LibraryVideoCardShape)
                     .background(MaterialTheme.colorScheme.error)
                     .padding(horizontal = 24.dp),
                 contentAlignment = Alignment.CenterStart,
@@ -782,7 +784,7 @@ private fun VideoRow(
             .fillMaxWidth()
             .clickable(onClick = onOpen),
         shape = LibraryVideoCardShape,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = Color.Black),
         border = if (highlighted) {
             BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
         } else {
