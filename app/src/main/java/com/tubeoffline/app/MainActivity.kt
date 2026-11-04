@@ -17,11 +17,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -755,9 +757,13 @@ private fun SwipeTrashRow(
             }
         },
     ) {
-        content()
+        Box(Modifier.clip(LibraryVideoCardShape)) {
+            content()
+        }
     }
 }
+
+private val LibraryVideoCardShape = RoundedCornerShape(12.dp)
 
 @Composable
 private fun VideoRow(
@@ -770,18 +776,19 @@ private fun VideoRow(
     onShare: (() -> Unit)?,
     onDelete: () -> Unit,
 ) {
-    val highlightMod = if (highlighted) {
-        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
-    } else {
-        Modifier
-    }
     val elevation by animateDpAsState(if (dragging) 6.dp else 0.dp, label = "reorderElevation")
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .then(highlightMod)
             .clickable(onClick = onOpen),
-        elevation = androidx.compose.material3.CardDefaults.cardElevation(defaultElevation = elevation),
+        shape = LibraryVideoCardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = if (highlighted) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation),
     ) {
         Row(
             Modifier.padding(start = 4.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
