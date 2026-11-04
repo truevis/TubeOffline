@@ -176,25 +176,51 @@ private fun MainScreen(
     }
     val snackbarHostState = remember { SnackbarHostState() }
     var pasted by remember { mutableStateOf("") }
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by remember {
+        mutableStateOf(AppPreferences.getLibrarySearchQuery(context))
+    }
     val haptic = LocalHapticFeedback.current
     val videosLatest = rememberUpdatedState(videos)
     val searchQueryLatest = rememberUpdatedState(searchQuery)
-    val canReorder = searchQuery.isBlank()
+    // Persist search so PlaybackService (autoplay / notification prev-next) stays
+    // scoped while the UI is backgrounded, in PiP, or after process death.
+    LaunchedEffect(searchQuery) {
+        AppPreferences.setLibrarySearchQuery(context, searchQuery)
+    }
     val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
-        if (searchQueryLatest.value.isNotBlank()) return@rememberReorderableLazyListState
         val fromKey = from.key as? String ?: return@rememberReorderableLazyListState
         val toKey = to.key as? String ?: return@rememberReorderableLazyListState
-        val mutable = videosLatest.value.toMutableList()
-        val fromIndex = mutable.indexOfFirst { it.uri.toString() == fromKey }
-        val toIndex = mutable.indexOfFirst { it.uri.toString() == toKey }
-        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) {
-            return@rememberReorderableLazyListState
+        val q = searchQueryLatest.value.trim()
+        val full = videosLatest.value
+        if (q.isEmpty()) {
+            val mutable = full.toMutableList()
+            val fromIndex = mutable.indexOfFirst { it.uri.toString() == fromKey }
+            val toIndex = mutable.indexOfFirst { it.uri.toString() == toKey }
+            if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) {
+                return@rememberReorderableLazyListState
+            }
+            val item = mutable.removeAt(fromIndex)
+            mutable.add(toIndex, item)
+            videos = mutable
+            LibraryOrderStore.saveOrder(context, mutable.map { it.uri })
+        } else {
+            // Reorder only among visible matches; hidden rows keep their slots.
+            val visible = full.filter { VideoStore.matchesSearch(it, q) }.toMutableList()
+            val fromIndex = visible.indexOfFirst { it.uri.toString() == fromKey }
+            val toIndex = visible.indexOfFirst { it.uri.toString() == toKey }
+            if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) {
+                return@rememberReorderableLazyListState
+            }
+            val item = visible.removeAt(fromIndex)
+            visible.add(toIndex, item)
+            val fullKeys = full.map { it.uri.toString() }
+            val visibleKeys = visible.map { it.uri.toString() }
+            val mergedKeys = mergeFilteredReorder(fullKeys, visibleKeys)
+            val byKey = full.associateBy { it.uri.toString() }
+            val merged = mergedKeys.mapNotNull { byKey[it] }
+            videos = merged
+            LibraryOrderStore.saveOrder(context, merged.map { it.uri })
         }
-        val item = mutable.removeAt(fromIndex)
-        mutable.add(toIndex, item)
-        videos = mutable
-        LibraryOrderStore.saveOrder(context, mutable.map { it.uri })
         haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
     }
     var pendingHighlightUri by remember { mutableStateOf<Uri?>(null) }
@@ -203,8 +229,7 @@ private fun MainScreen(
     var autoplay by remember { mutableStateOf(AppPreferences.isAutoplayEnabled(context)) }
 
     val filteredVideos = remember(videos, searchQuery) {
-        val q = searchQuery.trim()
-        if (q.isEmpty()) videos else videos.filter { it.name.contains(q, ignoreCase = true) }
+        videos.filter { VideoStore.matchesSearch(it, searchQuery) }
     }
 
     // When opened from share (or duplicate paste), scroll the existing row into view briefly.
@@ -631,28 +656,15 @@ private fun MainScreen(
                         context.startActivity(Intent.createChooser(send, null))
                     }
                 }
-                if (canReorder) {
-                    ReorderableItem(reorderableState, key = video.uri.toString()) { isDragging ->
-                        val itemScope = this
-                        SwipeTrashRow(onSwiped = { swipeTrash(video) }) {
-                            VideoRow(
-                                video = video,
-                                played = video.uri.toString() in completedUris,
-                                highlighted = video.uri == activeHighlightUri,
-                                dragging = isDragging,
-                                reorderScope = itemScope,
-                                onOpen = openVideo,
-                                onShare = shareVideo,
-                                onDelete = { toDelete = video },
-                            )
-                        }
-                    }
-                } else {
+                ReorderableItem(reorderableState, key = video.uri.toString()) { isDragging ->
+                    val itemScope = this
                     SwipeTrashRow(onSwiped = { swipeTrash(video) }) {
                         VideoRow(
                             video = video,
                             played = video.uri.toString() in completedUris,
                             highlighted = video.uri == activeHighlightUri,
+                            dragging = isDragging,
+                            reorderScope = itemScope,
                             onOpen = openVideo,
                             onShare = shareVideo,
                             onDelete = { toDelete = video },

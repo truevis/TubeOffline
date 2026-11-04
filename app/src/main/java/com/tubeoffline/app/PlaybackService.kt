@@ -221,8 +221,9 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
         }
 
         /**
-         * Manual next/prev: adjacent row in [VideoStore] order, no wrap, does not
-         * skip watched items (unlike autoplay). Returns false when already at end.
+         * Manual next/prev: adjacent row in [VideoStore] playlist order (honours the
+         * live library search filter), no wrap, does not skip watched items (unlike
+         * autoplay). Returns false when already at end.
          */
         fun playAdjacent(context: android.content.Context, player: Player, direction: Int): Boolean {
             val currentUri = player.currentMediaItem?.mediaId?.let(Uri::parse) ?: return false
@@ -294,8 +295,10 @@ class PlaybackService : MediaSessionService(), MediaSession.Callback {
 
 /**
  * Previous and next on the player and the media notification move to the adjacent
- * downloaded video (no wrap). Rewind and fast-forward stay the player's seek
- * increments (10s back, 15s forward). Buttons are disabled at the ends of the list.
+ * downloaded video in the current playlist (full library, or search matches when the
+ * library search box has text; no wrap). Rewind and fast-forward stay the player's
+ * seek increments (10s back, 15s forward). Buttons are disabled at the ends of the
+ * playlist.
  */
 @UnstableApi
 private class LibraryNavigatingPlayer(

@@ -36,4 +36,31 @@ class LibraryOrderStoreTest {
     fun emptyMediaReturnsEmpty() {
         assertEquals(emptyList<String>(), mergeLibraryOrder(emptyList(), listOf("a")))
     }
+
+    @Test
+    fun filteredReorderKeepsHiddenSlots() {
+        // Full order A,b,C,d,E; visible A,C,E dragged so E is first → E,b,A,d,C
+        val full = listOf("A", "b", "C", "d", "E")
+        val visible = listOf("E", "A", "C")
+        assertEquals(listOf("E", "b", "A", "d", "C"), mergeFilteredReorder(full, visible))
+    }
+
+    @Test
+    fun filteredReorderNoOpWhenVisibleEmpty() {
+        val full = listOf("A", "b", "C")
+        assertEquals(full, mergeFilteredReorder(full, emptyList()))
+    }
+
+    @Test
+    fun filteredReorderReturnsFullWhenVisibleMismatch() {
+        val full = listOf("A", "b", "C")
+        // "X" is not in full; slot count will not match
+        assertEquals(full, mergeFilteredReorder(full, listOf("A", "X")))
+    }
+
+    @Test
+    fun filteredReorderSingleVisibleIsNoOp() {
+        val full = listOf("A", "b", "C")
+        assertEquals(full, mergeFilteredReorder(full, listOf("b")))
+    }
 }

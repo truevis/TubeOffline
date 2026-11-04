@@ -54,6 +54,34 @@ object LibraryOrderStore {
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
 
+
+/**
+ * After the user reorders the visible (search-filtered) subset to [newVisibleOrder],
+ * write those keys back into the slots they occupied in [fullOrder]. Hidden keys keep
+ * their exact indices.
+ *
+ * Example: full order A,b,C,d,E with visible A,C,E reordered to E,A,C yields E,b,A,d,C.
+ * Returns [fullOrder] unchanged when sizes do not line up (duplicate/missing keys).
+ */
+internal fun mergeFilteredReorder(
+    fullOrder: List<String>,
+    newVisibleOrder: List<String>,
+): List<String> {
+    if (fullOrder.isEmpty() || newVisibleOrder.isEmpty()) return fullOrder
+    val visibleSet = newVisibleOrder.toHashSet()
+    if (visibleSet.size != newVisibleOrder.size) return fullOrder
+    val slots = ArrayList<Int>(newVisibleOrder.size)
+    for ((index, key) in fullOrder.withIndex()) {
+        if (key in visibleSet) slots += index
+    }
+    if (slots.size != newVisibleOrder.size) return fullOrder
+    val result = fullOrder.toMutableList()
+    for (i in slots.indices) {
+        result[slots[i]] = newVisibleOrder[i]
+    }
+    return result
+}
+
 /**
  * Pure merge: [mediaStoreKeysNewestFirst] is the MediaStore order; [savedOrder] is the
  * user's drag order. Keys only in the media list (new downloads) stay on top;

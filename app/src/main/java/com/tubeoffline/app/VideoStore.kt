@@ -166,9 +166,13 @@ object VideoStore {
     }
 
     /**
-     * Next library row after [uri] (same order as the main list: custom drag order when set, otherwise newest first).
-     * [skip] can omit already-watched items for autoplay; if every later row is
-     * skipped, returns null so playback stops instead of looping.
+     * Next library row after [uri] in playlist order (custom drag order when set, otherwise newest first).
+     * When [AppPreferences.getLibrarySearchQuery] is non-blank, only rows whose
+     * display name contains that query (same filter as the main-screen search) are
+     * candidates. If [uri] itself does not match, returns the next matching neighbour
+     * after it in full library order. [skip] can omit already-watched items for
+     * autoplay; if every later row is skipped, returns null so playback stops instead
+     * of looping.
      */
     fun nextAfter(
         context: Context,
@@ -176,15 +180,15 @@ object VideoStore {
         skip: (SavedVideo) -> Boolean = { false },
     ): SavedVideo? {
         val videos = list(context)
-        val index = videos.indexOfFirst { it.uri == uri }
-        if (index < 0) return null
-        return videos.asSequence().drop(index + 1).firstOrNull { !skip(it) }
+        val query = AppPreferences.getLibrarySearchQuery(context)
+        return adjacentInPlaylist(videos, uri, direction = +1, query = query, skip = skip)
     }
 
     /**
-     * Previous library row before [uri] (same order as the main list: custom drag order when set, otherwise newest first).
-     * Does not wrap: returns null when [uri] is first or missing. [skip] mirrors
-     * [nextAfter] for symmetry; manual prev/next leave it at the default.
+     * Previous library row before [uri] in playlist order (custom drag order when set, otherwise newest first).
+     * Search scoping matches [nextAfter]. Does not wrap: returns null when there is
+     * no earlier matching row. [skip] mirrors [nextAfter] for symmetry; manual
+     * prev/next leave it at the default.
      */
     fun previousBefore(
         context: Context,
@@ -192,9 +196,15 @@ object VideoStore {
         skip: (SavedVideo) -> Boolean = { false },
     ): SavedVideo? {
         val videos = list(context)
-        val index = videos.indexOfFirst { it.uri == uri }
-        if (index <= 0) return null
-        return videos.asSequence().take(index).toList().asReversed().firstOrNull { !skip(it) }
+        val query = AppPreferences.getLibrarySearchQuery(context)
+        return adjacentInPlaylist(videos, uri, direction = -1, query = query, skip = skip)
+    }
+
+    /** Same name-contains match as the main-screen search field (case-insensitive). */
+    fun matchesSearch(video: SavedVideo, query: String): Boolean {
+        val q = query.trim()
+        if (q.isEmpty()) return true
+        return video.name.contains(q, ignoreCase = true)
     }
 
     sealed interface TrashResult {
@@ -302,5 +312,56 @@ object VideoStore {
                 )?.use { it.moveToFirst() } == true
             }
         }.getOrDefault(false)
+    }
+}
+
+
+/**
+ * Pure adjacent lookup used by [VideoStore.nextAfter] / [previousBefore].
+ * [direction] +1 = next, -1 = previous. Non-blank [query] limits the playlist to
+ * name matches; a non-matching current [uri] still yields the nearest matching
+ * neighbour in full [videos] order.
+ */
+internal fun adjacentInPlaylist(
+    videos: List<SavedVideo>,
+    uri: android.net.Uri,
+    direction: Int,
+    query: String,
+    skip: (SavedVideo) -> Boolean = { false },
+): SavedVideo? {
+    val currentPos = videos.indexOfFirst { it.uri == uri }
+    return adjacentInFilteredList(
+        items = videos,
+        currentIndex = currentPos,
+        direction = direction,
+        matches = { VideoStore.matchesSearch(it, query) },
+        skip = skip,
+    )
+}
+
+/**
+ * Index-based adjacent walk over a filtered view of [items]. Hidden (non-matching)
+ * rows are skipped; [currentIndex] may itself be non-matching (nearest neighbour).
+ */
+internal fun <T> adjacentInFilteredList(
+    items: List<T>,
+    currentIndex: Int,
+    direction: Int,
+    matches: (T) -> Boolean,
+    skip: (T) -> Boolean = { false },
+): T? {
+    if (items.isEmpty() || currentIndex !in items.indices) return null
+    val indexed = items.withIndex().filter { matches(it.value) }
+    if (indexed.isEmpty()) return null
+    return if (direction >= 0) {
+        indexed.asSequence()
+            .filter { it.index > currentIndex }
+            .map { it.value }
+            .firstOrNull { !skip(it) }
+    } else {
+        indexed.asReversed().asSequence()
+            .filter { it.index < currentIndex }
+            .map { it.value }
+            .firstOrNull { !skip(it) }
     }
 }
