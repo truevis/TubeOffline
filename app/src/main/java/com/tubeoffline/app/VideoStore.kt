@@ -277,6 +277,19 @@ object VideoStore {
         DeleteResult.Failed(e.message ?: "Delete failed")
     }
 
+    /**
+     * One system confirmation for several videos the app no longer owns (for example
+     * after a reinstall). Null before Android 11, where only per-item prompts exist.
+     */
+    fun bulkDeleteRequest(context: Context, uris: List<Uri>): IntentSender? =
+        if (Build.VERSION.SDK_INT >= 30 && uris.isNotEmpty()) {
+            runCatching {
+                MediaStore.createDeleteRequest(context.contentResolver, uris).intentSender
+            }.getOrNull()
+        } else {
+            null
+        }
+
     private fun permanentlyDelete(context: Context, uri: Uri) {
         val resolver = context.contentResolver
         // Owned content is removed for good on the first delete. A blind second delete
@@ -365,3 +378,10 @@ internal fun <T> adjacentInFilteredList(
             .firstOrNull { !skip(it) }
     }
 }
+
+/**
+ * Videos marked finished (the dimmed titles autoplay skips), in library order.
+ * Used by "Delete watched"; always the whole library, never the search-filtered view.
+ */
+internal fun <T> watchedOnly(items: List<T>, key: (T) -> String, completedKeys: Set<String>): List<T> =
+    items.filter { key(it) in completedKeys }

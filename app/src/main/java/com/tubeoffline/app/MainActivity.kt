@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -172,6 +173,10 @@ private fun MainScreen(
     var completedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var toDelete by remember { mutableStateOf<SavedVideo?>(null) }
+    var watchedToDelete by remember { mutableStateOf<List<SavedVideo>?>(null) }
+    var pendingBulkDelete by remember { mutableStateOf<List<SavedVideo>>(emptyList()) }
+    var bulkDeletedSoFar by remember { mutableIntStateOf(0) }
+    var bulkFailedSoFar by remember { mutableIntStateOf(0) }
     var pendingDeleteUri by remember { mutableStateOf<Uri?>(null) }
     var pendingDeleteYouTubeId by remember { mutableStateOf<String?>(null) }
     var pendingSwipeTrash by remember {
@@ -234,6 +239,10 @@ private fun MainScreen(
     val filteredVideos = remember(videos, searchQuery) {
         videos.filter { VideoStore.matchesSearch(it, searchQuery) }
     }
+    // Whole library, independent of the search filter.
+    val watchedVideos = remember(videos, completedUris) {
+        watchedOnly(videos, { it.uri.toString() }, completedUris)
+    }
 
     // When opened from share (or duplicate paste), scroll the existing row into view briefly.
     LaunchedEffect(activeHighlightUri, videos, filteredVideos, status.active, status.lastMessage, nowPlaying) {
@@ -280,6 +289,71 @@ private fun MainScreen(
         pendingDeleteUri = null
         pendingDeleteYouTubeId = null
         refresh()
+    }
+
+    fun reportBulkDelete(deleted: Int, notDeleted: Int) {
+        val noun = if (deleted == 1) "video" else "videos"
+        val msg = buildString {
+            append("Deleted $deleted watched $noun")
+            if (notDeleted > 0) append(" ($notDeleted couldn't be deleted)")
+        }
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    val bulkDeleteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val batch = pendingBulkDelete
+        pendingBulkDelete = emptyList()
+        if (result.resultCode == Activity.RESULT_OK) {
+            batch.forEach { v ->
+                PlaybackService.stopIfPlaying(v.uri)
+                cleanupDeleted(v.uri, v.youTubeId)
+            }
+            reportBulkDelete(bulkDeletedSoFar + batch.size, bulkFailedSoFar)
+        } else {
+            reportBulkDelete(bulkDeletedSoFar, bulkFailedSoFar + batch.size)
+        }
+        refresh()
+    }
+
+    /** Same delete path as the row trash button, applied to every finished video. */
+    fun deleteWatched(targets: List<SavedVideo>) {
+        if (targets.isEmpty()) return
+        val keys = targets.map { it.uri.toString() }.toSet()
+        videos = videos.filter { it.uri.toString() !in keys }
+        completedUris = completedUris - keys
+        scope.launch {
+            targets.forEach { PlaybackService.stopIfPlaying(it.uri) }
+            val deleted = mutableListOf<SavedVideo>()
+            val needsConfirm = mutableListOf<SavedVideo>()
+            var failed = 0
+            withContext(Dispatchers.IO) {
+                for (v in targets) {
+                    when (VideoStore.delete(context, v.uri)) {
+                        VideoStore.DeleteResult.Deleted -> deleted += v
+                        is VideoStore.DeleteResult.NeedsConfirmation -> needsConfirm += v
+                        is VideoStore.DeleteResult.Failed -> failed++
+                    }
+                }
+            }
+            deleted.forEach { cleanupDeleted(it.uri, it.youTubeId) }
+            if (needsConfirm.isNotEmpty()) {
+                val sender = withContext(Dispatchers.IO) {
+                    VideoStore.bulkDeleteRequest(context, needsConfirm.map { it.uri })
+                }
+                if (sender != null) {
+                    pendingBulkDelete = needsConfirm.toList()
+                    bulkDeletedSoFar = deleted.size
+                    bulkFailedSoFar = failed
+                    bulkDeleteLauncher.launch(IntentSenderRequest.Builder(sender).build())
+                    return@launch
+                }
+                failed += needsConfirm.size
+            }
+            reportBulkDelete(deleted.size, failed)
+            refresh()
+        }
     }
 
     fun restoreSwipeRow(pending: PendingSwipeTrash) {
@@ -617,12 +691,28 @@ private fun MainScreen(
                     q.isNotEmpty() -> "Results"
                     else -> null
                 }
-                if (heading != null) {
-                    Text(
-                        heading,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
+                val showDeleteWatched = watchedVideos.isNotEmpty() && pendingBulkDelete.isEmpty()
+                if (heading != null || showDeleteWatched) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            heading ?: "Library",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (showDeleteWatched) {
+                            TextButton(onClick = { watchedToDelete = watchedVideos }) {
+                                Icon(
+                                    Icons.Outlined.Delete,
+                                    contentDescription = null,
+                                    modifier = Modifier.padding(end = 4.dp),
+                                )
+                                Text("Delete watched (${watchedVideos.size})")
+                            }
+                        }
+                    }
                 }
             }
 
@@ -676,6 +766,52 @@ private fun MainScreen(
                 }
             }
         }
+    }
+
+    watchedToDelete?.let { targets ->
+        val totalBytes = targets.sumOf { it.sizeBytes.coerceAtLeast(0L) }
+        val noun = if (targets.size == 1) "video" else "videos"
+        AlertDialog(
+            onDismissRequest = { watchedToDelete = null },
+            title = { Text("Delete ${targets.size} watched $noun?") },
+            text = {
+                Column {
+                    Text(
+                        "Frees ${formatSize(totalBytes)}. " +
+                            "These files are permanently deleted from Movies/TubeOffline, not sent to trash.",
+                    )
+                    if (searchQuery.isNotBlank()) {
+                        Text(
+                            "This covers your whole library, not just the current search.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                    Spacer(Modifier.padding(4.dp))
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(targets, key = { it.uri.toString() }) { v ->
+                            Text(
+                                "• ${v.name.substringBeforeLast('.')}  (${formatSize(v.sizeBytes)})",
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    watchedToDelete = null
+                    deleteWatched(targets)
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { watchedToDelete = null }) { Text("Cancel") } },
+        )
     }
 
     toDelete?.let { video ->
